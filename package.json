@@ -1,0 +1,26 @@
+{
+  "name": "qqbot-nb-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "QQ 官方机器人 + AI Agent + 在线代码部署,运行在 Cloudflare Workers 上",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "tail": "wrangler tail --format pretty",
+    "check:secrets": "node tools/scan-secrets.js",
+    "pretest": "node tools/scan-secrets.js",
+    "test": "node test/run.js",
+    "test:integration": "node test/integration.js",
+    "test:all": "node tools/scan-secrets.js && node test/run.js && node test/integration.js",
+    "test:live": "node test/live.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.20.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "AGPL-3.0"
+}

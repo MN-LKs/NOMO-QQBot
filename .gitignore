@@ -34,3 +34,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ---- 本项目补充 ----
+.dev.vars
+.wrangler/
+.wrangler.toml.bak
+*.log

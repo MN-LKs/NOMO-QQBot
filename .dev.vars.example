@@ -1,0 +1,11 @@
+# 本地开发用的变量覆盖(wrangler dev 会自动读取 .dev.vars)
+# 复制成 .dev.vars 再改。这个文件已经在 .gitignore 里,不会被提交。
+
+WEBHOOK_SECRET=dev-secret
+ADMIN_TOKEN=dev-admin
+VERIFY_SIGNATURE=true
+
+# 想本地调试而不花真实额度,可以把上游指向自己的假服务
+# LLM_BASE_URL=http://127.0.0.1:8790/v1
+# QQ_API_BASE=http://127.0.0.1:8790
+# QQ_TOKEN_URL=http://127.0.0.1:8790/app/getAppAccessToken

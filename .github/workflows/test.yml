@@ -1,0 +1,22 @@
+name: test
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: 敏感信息扫描(有密钥就直接失败)
+        run: node tools/scan-secrets.js
+      - name: 单元测试
+        run: node test/run.js
+      - name: 集成测试(不需要联网)
+        run: node test/integration.js
