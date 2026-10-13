@@ -1,22 +1,14 @@
-// BotCore —— 整个机器人的大脑,跑在 Durable Object 里。
-//
-// 为什么用 Durable Object?
-//   1. Workers 的 ctx.waitUntil 只给 30 秒,而 reasoning_effort=max 的一次问答轻松 60~120 秒;
-//      DO 的闹钟单次可以跑 15 分钟,足够把一条消息处理完。
-//   2. 免费套餐里 DO 用 SQLite 后端是可用的(5 GB),上下文/部署/队列都能持久化,
-//      而且「没人访问就不消耗」——不占 CPU、不占请求数。
-
 import { loadConfig } from '../config.js';
 import { SCHEMA } from './schema.js';
 import { genSiteId, isReservedPath } from '../util/id.js';
 import { chunkText, safeJson, toPlainText, truncate } from '../util/text.js';
-import { fetchAccessToken, deliver, sendGroupMessage, sendC2CMessage, explainError } from '../qq/api.js';
+import { fetchAccessToken, deliver } from '../qq/api.js';
 import { runAgent } from '../agent/loop.js';
 import { buildCompressPrompt, buildHelpText } from '../agent/prompt.js';
 import { chatWithFallback } from '../agent/llm.js';
 
 const JOB_MAX_PER_ALARM = 25;
-const ALARM_DEADLINE_MS = 12 * 60 * 1000; // 闹钟单次 15 分钟上限,留 3 分钟余量
+const ALARM_DEADLINE_MS = 12 * 60 * 1000;
 const EVENT_TTL_MS = 10 * 60 * 1000;
 
 export class BotCore {
@@ -28,9 +20,6 @@ export class BotCore {
     for (const stmt of SCHEMA) this.sql.exec(stmt);
   }
 
-  // =========================================================================
-  // 对外 HTTP 接口(给外层 Worker 调用)
-  // =========================================================================
   async fetch(request) {
     const url = new URL(request.url);
     const p = url.pathname;
@@ -86,9 +75,6 @@ export class BotCore {
     }
   }
 
-  // =========================================================================
-  // 闹钟:处理队列 + 清理过期部署
-  // =========================================================================
   async alarm() {
     try {
       await this.tick();
@@ -112,7 +98,6 @@ export class BotCore {
     this.armAlarm();
   }
 
-  /** 还有活就再设一个闹钟;没有就把闹钟设到下一个站点过期时间 */
   armAlarm() {
     const pending = this.countJobs('pending') + this.countJobs('running');
     if (pending > 0) {
@@ -123,9 +108,6 @@ export class BotCore {
     if (nextExpiry) this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, nextExpiry + 1000));
   }
 
-  // =========================================================================
-  // 任务队列
-  // =========================================================================
   enqueue(payload) {
     const id = payload.eventId || `j_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const existing = this.sql
@@ -150,7 +132,6 @@ export class BotCore {
 
   finishJob(id, error) {
     this.sql.exec('UPDATE jobs SET status = ?, error = ? WHERE id = ?', error ? 'failed' : 'done', error || null, id);
-    // 顺手清掉 1 小时前的老任务,别把库撑爆
     this.sql.exec('DELETE FROM jobs WHERE created_at < ?', Date.now() - 3600_000);
   }
 
@@ -175,13 +156,11 @@ export class BotCore {
       this.finishJob(job.id, String(e?.message || e).slice(0, 300));
       try {
         await this.notifyFailure(payload, e);
-      } catch { /* 通知失败就算了 */ }
+      } catch {
+  }
     }
   }
 
-  // =========================================================================
-  // 消息处理主流程
-  // =========================================================================
   async handleMessage(p) {
     const cfg = this.cfg;
     const convId = p.convId;
@@ -190,7 +169,6 @@ export class BotCore {
 
     log(`[收到] conv=${convId} user=${p.nickname || p.userId} text=${truncate(text, 120)}`);
 
-    // ---- 命令 ----
     const cmd = parseCommand(text);
     if (cmd.name === 'help' || (!text && !cmd.name)) {
       await this.reply(p, buildHelpText(cfg));
@@ -222,7 +200,6 @@ export class BotCore {
       return;
     }
 
-    // ---- 交给 Agent ----
     const body = cmd.name === 'ai' ? cmd.args : text;
     if (!body) {
       await this.reply(p, buildHelpText(cfg));
@@ -248,6 +225,11 @@ export class BotCore {
       { role: 'assistant', content: truncate(plain, 2500) },
     ]);
     this.trimContext(convId);
+    try {
+      await this.maybeAutoCompress(convId);
+    } catch (e) {
+      console.warn('[上下文] 自动压缩失败', e?.message || e);
+    }
 
     console.log(`[完成] conv=${convId} 轮次=${result.rounds} 工具=${result.toolTrace.length} `
       + `token=${result.usageTotal} 耗时=${result.elapsedMs}ms 降级=${result.downgraded}`);
@@ -257,9 +239,6 @@ export class BotCore {
     await this.reply(p, `😵 处理这条消息时出错了:${truncate(String(e?.message || e), 150)}\n稍后再试一次吧。`);
   }
 
-  // =========================================================================
-  // 发消息(带 token 缓存)
-  // =========================================================================
   async getToken() {
     const cached = this.kvGet('qq_token');
     if (cached) return cached;
@@ -273,12 +252,10 @@ export class BotCore {
     const token = await this.getToken();
     const chunks = chunkText(text, opts.chunkSize || 800, opts.maxChunks || 5);
     if (!chunks.length) return { sent: [], errors: [] };
-    // 注意:normaliseEvent 里 kind 恒为 'message',场景在 scene 字段。
-    // 之前这里写成 p.kind === 'group' 永远为假,群消息会被发到单聊接口 /v2/users/...
     const target = p.scene === 'c2c'
       ? { kind: 'c2c', id: p.targetId }
       : { kind: 'group', id: p.targetId };
-    const r = await deliver(cfg, token, target, null, {
+    const r = await deliver(cfg, token, target, {
       chunks,
       msgId: p.messageId,
       msgSeqStart: opts.seqStart || 1,
@@ -288,9 +265,6 @@ export class BotCore {
     return r;
   }
 
-  // =========================================================================
-  // 上下文
-  // =========================================================================
   getContext(convId) {
     const c = this.sql.exec('SELECT * FROM conv WHERE id = ?', convId).toArray();
     const msgs = this.sql
@@ -320,7 +294,6 @@ export class BotCore {
     return seq;
   }
 
-  /** 超出保留条数就把最老的丢掉(不是删,而是并进摘要里,免得忘事) */
   trimContext(convId) {
     const keep = this.cfg.keepMessages;
     const all = this.sql
@@ -343,7 +316,6 @@ export class BotCore {
     );
   }
 
-  /** /压缩:把历史丢给模型压成摘要 */
   async compressContext(convId) {
     const cur = this.getContext(convId);
     if (!cur.messages.length && !cur.summary) return { ok: false, error: '这个会话还没有聊天记录' };
@@ -359,7 +331,7 @@ export class BotCore {
     const resp = await chatWithFallback(this.cfg, [
       { role: 'system', content: buildCompressPrompt() },
       { role: 'user', content: input },
-    ], null, { effort: 'low', maxTokens: 1200, timeoutMs: 90000 });
+    ], null, { effort: 'low', timeoutMs: 60000 });
 
     const summary = truncate(resp.content.trim(), this.cfg.summaryChars);
     if (!summary) return { ok: false, error: '模型没有产出摘要,稍后再试' };
@@ -371,7 +343,6 @@ export class BotCore {
     return { ok: true, summary, kept: tail.length };
   }
 
-  /** 内容太长就自动压一次 */
   async maybeAutoCompress(convId) {
     const cur = this.getContext(convId);
     const size = cur.summary.length + cur.messages.reduce((n, m) => n + m.content.length, 0);
@@ -380,9 +351,6 @@ export class BotCore {
     return !!r.ok;
   }
 
-  // =========================================================================
-  // 站点(部署)
-  // =========================================================================
   createSite({ name, description, files, owner }) {
     const cfg = this.cfg;
     const now = Date.now();
@@ -496,10 +464,6 @@ export class BotCore {
     return after < before;
   }
 
-  /**
-   * 名额控制:超过上限时,删掉「最久没有被修改」的那一个。
-   * 刚刚新建的 keepId 永远不删(需求里写明了:不包括刚刚新生成的)。
-   */
   enforceLimit(keepId) {
     const max = this.cfg.maxSites;
     let evicted = null;
@@ -530,9 +494,6 @@ export class BotCore {
     return r[0]?.t ?? null;
   }
 
-  // =========================================================================
-  // 站点的内置后端存储
-  // =========================================================================
   dataGet(siteId, key) {
     if (!this.getSite(siteId)) return null;
     const r = this.sql
@@ -557,9 +518,6 @@ export class BotCore {
     return { ok: true };
   }
 
-  // =========================================================================
-  // 小工具
-  // =========================================================================
   kvGet(k) {
     const r = this.sql.exec('SELECT v, exp FROM kv WHERE k = ?', k).toArray()[0];
     if (!r) return null;
@@ -577,7 +535,6 @@ export class BotCore {
     );
   }
 
-  /** 事件去重:同一条推送腾讯可能重发,不能重复干活 */
   seenEvent(eventId) {
     if (!eventId) return false;
     const k = `ev_${eventId}`;
@@ -614,7 +571,6 @@ function json(obj, status = 200) {
   });
 }
 
-/** 解析 /命令 */
 export function parseCommand(text) {
   const t = String(text || '').trim();
   const m = /^[/／]([a-zA-Z\u4e00-\u9fa5]+)\s*([\s\S]*)$/.exec(t);
@@ -629,5 +585,3 @@ export function parseCommand(text) {
   };
   return { name: alias[raw] ?? '', args: m[2].trim() };
 }
-
-export { sendGroupMessage, sendC2CMessage, explainError };

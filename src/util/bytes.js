@@ -1,5 +1,3 @@
-// 字节/编码小工具。全部零依赖,纯函数,方便单测。
-
 const HEX = '0123456789abcdef';
 
 export function hexToBytes(hex) {
@@ -37,28 +35,4 @@ export function concatBytes(...parts) {
     off += p.length;
   }
   return out;
-}
-
-export function b64urlToBytes(b64url) {
-  let s = String(b64url).replace(/-/g, '+').replace(/_/g, '/');
-  while (s.length % 4) s += '=';
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-/** 定长随机字节(Workers / Node 都支持 crypto.getRandomValues) */
-export function randomBytes(n) {
-  const b = new Uint8Array(n);
-  crypto.getRandomValues(b);
-  return b;
-}
-
-/** 常量时间比较,避免签名比较时泄漏时序信息 */
-export function timingSafeEqual(a, b) {
-  if (!a || !b || a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];
-  return diff === 0;
 }

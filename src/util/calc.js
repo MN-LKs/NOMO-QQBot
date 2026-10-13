@@ -1,6 +1,3 @@
-// 安全计算器。Workers 里不能用 eval/new Function,所以自己写一个递归下降解析器。
-// 支持 + - * / % ^ ( ),一元正负,以及少量函数与常量。
-
 const FUNCS = {
   abs: Math.abs, sqrt: Math.sqrt, cbrt: Math.cbrt, round: Math.round,
   floor: Math.floor, ceil: Math.ceil, sign: Math.sign, exp: Math.exp,
@@ -134,7 +131,6 @@ export function calc(expr) {
   return out;
 }
 
-/** 给模型看的漂亮结果:整数就不带小数点 */
 export function formatNumber(n) {
   if (Number.isInteger(n)) return String(n);
   const r = Math.round(n * 1e12) / 1e12;

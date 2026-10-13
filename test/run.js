@@ -1,21 +1,21 @@
 // 零依赖单测。跑法:node test/run.js
-// 覆盖所有「纯逻辑」:签名、SSE 解析、文本处理、ID、计算器、HTML 解析、路径校验、事件归一化、命令解析。
 
 import assert from 'node:assert/strict';
 import { seedFromSecret, signValidation, verifyWebhook, keysFromSecret } from '../src/qq/sign.js';
-import { bytesToHex, hexToBytes, concatBytes, timingSafeEqual, b64urlToBytes } from '../src/util/bytes.js';
-import { chunkText, toPlainText, truncate, roughTokens, findUrls, safeJson } from '../src/util/text.js';
+import { bytesToHex, hexToBytes, concatBytes } from '../src/util/bytes.js';
+import { chunkText, toPlainText, truncate, safeJson } from '../src/util/text.js';
 import { genSiteId, isReservedPath } from '../src/util/id.js';
 import { calc, formatNumber } from '../src/util/calc.js';
-import { htmlToText, parseSearchResults, decodeEntities, htmlTitle } from '../src/util/html.js';
-import { feedSseChunk, newStreamState, toToolCalls, hasNonEmptyString, extractString, flushSse } from '../src/agent/llm.js';
+import { htmlToText, decodeEntities } from '../src/util/html.js';
+import { parseCompletion, isBlank, RETRY_NUDGE } from '../src/agent/llm.js';
+import { detectProvider, extractResults, buildRequest, SUPPORTED_PROVIDERS } from '../src/agent/search.js';
 import { normaliseFiles } from '../src/agent/exec.js';
 import { normaliseEvent } from '../src/qq/webhook.js';
 import { parseCommand } from '../src/core/do.js';
 import { splitSitePath } from '../src/serve.js';
 import { buildTools } from '../src/agent/tools.js';
 import { buildSystemPrompt, buildHelpText } from '../src/agent/prompt.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, missingVars, ALL_VARS } from '../src/config.js';
 
 let pass = 0;
 let fail = 0;
@@ -103,15 +103,6 @@ test('concatBytes 拼接正确', () => {
   const r = concatBytes(new Uint8Array([1, 2]), new Uint8Array([3]));
   assert.deepEqual([...r], [1, 2, 3]);
 });
-test('timingSafeEqual', () => {
-  assert.equal(timingSafeEqual(new Uint8Array([1, 2]), new Uint8Array([1, 2])), true);
-  assert.equal(timingSafeEqual(new Uint8Array([1, 2]), new Uint8Array([1, 3])), false);
-  assert.equal(timingSafeEqual(new Uint8Array([1]), new Uint8Array([1, 2])), false);
-});
-test('b64url 解码', () => {
-  assert.deepEqual([...b64urlToBytes('AQID')], [1, 2, 3]);
-  assert.deepEqual([...b64urlToBytes('AQI')], [1, 2]);
-});
 
 // ===========================================================================
 // 3. 文本
@@ -152,13 +143,6 @@ test('toPlainText:去掉 Markdown 标记', () => {
 test('toPlainText:链接保留可读形式', () => {
   const r = toPlainText('看这里 [文档](https://example.com/x)');
   assert.ok(r.includes('文档(https://example.com/x)'));
-});
-test('roughTokens 中文按字算', () => {
-  assert.ok(roughTokens('你好世界') >= 4);
-  assert.ok(roughTokens('hello world') < 6);
-});
-test('findUrls', () => {
-  assert.deepEqual(findUrls('见 https://a.b/c 和 http://d.e'), ['https://a.b/c', 'http://d.e']);
 });
 test('safeJson', () => {
   assert.deepEqual(safeJson('{"a":1}'), { a: 1 });
@@ -244,94 +228,158 @@ test('htmlToText:剔脚本样式,保留正文', () => {
   assert.ok(!t.includes('evil'));
   assert.ok(!t.includes('a{}'));
 });
-test('htmlTitle', () => {
-  assert.equal(htmlTitle('<title>  标题  </title>'), '标题');
-});
-test('parseSearchResults:Bing 结构', () => {
-  const html = '<ol id="b_results">'
-    + '<li class="b_algo"><h2><a href="https://a.com/1">标题一</a></h2><p>摘要一</p></li>'
-    + '<li class="b_algo"><h2><a href="https://b.com/2">标题二</a></h2><p>摘要二</p></li>'
-    + '</ol>';
-  const r = parseSearchResults(html, 5);
-  assert.equal(r.length, 2);
-  assert.equal(r[0].url, 'https://a.com/1');
-  assert.equal(r[0].title, '标题一');
-  assert.equal(r[0].snippet, '摘要一');
-});
-test('parseSearchResults:去重', () => {
-  const html = '<li class="b_algo"><h2><a href="https://a.com">A</a></h2></li>'
-    + '<li class="b_algo"><h2><a href="https://a.com#x">A2</a></h2></li>';
-  assert.equal(parseSearchResults(html, 5).length, 1);
-});
-test('parseSearchResults:未知结构时兜底抓外链', () => {
-  const r = parseSearchResults('<div><a href="https://z.com">Z</a></div>', 5);
-  assert.equal(r.length, 1);
-  assert.equal(r[0].url, 'https://z.com');
-});
-
 // ===========================================================================
-// 7. SSE 解析
+// 7. 非流式响应解析
 // ===========================================================================
-test('hasNonEmptyString / extractString', () => {
-  const l = '{"delta":{"content":"","reasoning_content":"hi","function_call":null}}';
-  assert.equal(hasNonEmptyString(l, 'reasoning_content'), true);
-  assert.equal(hasNonEmptyString(l, 'content'), false);
-  assert.equal(extractString(l, 'reasoning_content'), 'hi');
+test('parseCompletion:正文与思考分流', () => {
+  const r = parseCompletion({
+    choices: [{ message: { content: '你好', reasoning_content: '让我想想' }, finish_reason: 'stop' }],
+    usage: { total_tokens: 42 },
+  });
+  assert.equal(r.content, '你好');
+  assert.equal(r.reasoningHead, '让我想想');
+  assert.equal(r.reasoningLen, 4);
+  assert.equal(r.finishReason, 'stop');
+  assert.equal(r.usage.total_tokens, 42);
+  assert.equal(r.toolCalls.length, 0);
 });
-test('SSE:正文与思考分流', () => {
-  const st = newStreamState();
-  feedSseChunk(st, 'data: {"choices":[{"delta":{"content":"","reasoning_content":"思考","function_call":null},"finish_reason":""}]}\n');
-  feedSseChunk(st, 'data: {"choices":[{"delta":{"content":"你","reasoning_content":""},"finish_reason":""}]}\n');
-  feedSseChunk(st, 'data: {"choices":[{"delta":{"content":"好","reasoning_content":""},"finish_reason":"stop"}]}\n');
-  flushSse(st);
-  assert.equal(st.content, '你好');
-  assert.equal(st.reasoningHead, '思考');
-  assert.equal(st.finishReason, 'stop');
+test('parseCompletion:思考只保留前 1500 字', () => {
+  const r = parseCompletion({ choices: [{ message: { content: 'x', reasoning_content: '思'.repeat(5000) } }] });
+  assert.equal(r.reasoningLen, 5000);
+  assert.equal(r.reasoningHead.length, 1500);
 });
-test('SSE:分片被切断也能正确拼接', () => {
-  const st = newStreamState();
-  const whole = 'data: {"choices":[{"delta":{"content":"完整内容","reasoning_content":""},"finish_reason":"stop"}]}\ndata: [DONE]\n';
-  for (let i = 0; i < whole.length; i += 7) feedSseChunk(st, whole.slice(i, i + 7));
-  flushSse(st);
-  assert.equal(st.content, '完整内容');
-  assert.equal(st.done, true);
+test('parseCompletion:兼容 reasoning 字段名', () => {
+  assert.equal(parseCompletion({ choices: [{ message: { reasoning: '想' } }] }).reasoningHead, '想');
+  assert.equal(parseCompletion({ choices: [{ message: { reasoning_text: '想2' } }] }).reasoningHead, '想2');
 });
-test('SSE:tool_calls 跨分片累积', () => {
-  const st = newStreamState();
-  feedSseChunk(st, 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"deploy_site","arguments":"{\\"na"}}]},"finish_reason":null}]}\n');
-  feedSseChunk(st, 'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"me\\":\\"x\\"}"}}]},"finish_reason":"tool_calls"}]}\n');
-  flushSse(st);
-  const tc = toToolCalls(st);
-  assert.equal(tc.length, 1);
-  assert.equal(tc[0].id, 'call_1');
-  assert.equal(tc[0].function.name, 'deploy_site');
-  assert.deepEqual(JSON.parse(tc[0].function.arguments), { name: 'x' });
+test('parseCompletion:tool_calls 解析', () => {
+  const r = parseCompletion({
+    choices: [{
+      message: {
+        content: '',
+        tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'calc', arguments: '{"expression":"1+1"}' } }],
+      },
+      finish_reason: 'tool_calls',
+    }],
+  });
+  assert.equal(r.toolCalls.length, 1);
+  assert.equal(r.toolCalls[0].function.name, 'calc');
+  assert.deepEqual(JSON.parse(r.toolCalls[0].function.arguments), { expression: '1+1' });
 });
-test('SSE:usage 与 [DONE]', () => {
-  const st = newStreamState();
-  feedSseChunk(st, 'data: {"choices":[{"delta":{"content":"a","reasoning_content":""}}],"usage":{"total_tokens":42}}\n');
-  feedSseChunk(st, 'data: [DONE]\n');
-  flushSse(st);
-  assert.equal(st.usage.total_tokens, 42);
-  assert.equal(st.done, true);
+test('parseCompletion:包裹式工具调用会被拆开', () => {
+  const r = parseCompletion({
+    choices: [{
+      message: {
+        tool_calls: [{
+          function: {
+            name: '',
+            arguments: '{"name":"deploy_site","arguments":{"name":"x","files":[]}}',
+          },
+        }],
+      },
+    }],
+  });
+  assert.equal(r.toolCalls.length, 1);
+  assert.equal(r.toolCalls[0].function.name, 'deploy_site');
+  assert.equal(JSON.parse(r.toolCalls[0].function.arguments).name, 'x');
 });
-test('SSE:换行/回车混合与空行', () => {
-  const st = newStreamState();
-  feedSseChunk(st, '\r\n\r\ndata: {"choices":[{"delta":{"content":"ok","reasoning_content":""}}]}\r\n');
-  flushSse(st);
-  assert.equal(st.content, 'ok');
-});
-test('SSE:思考摘要只保留前 1500 字', () => {
-  const st = newStreamState();
-  for (let i = 0; i < 100; i++) {
-    feedSseChunk(st, `data: {"choices":[{"delta":{"content":"","reasoning_content":"${'思'.repeat(50)}"}}]}\n`);
+test('parseCompletion:空结构不炸', () => {
+  for (const j of [null, {}, { choices: [] }, { choices: [{}] }]) {
+    const r = parseCompletion(j);
+    assert.equal(r.content, '');
+    assert.equal(r.toolCalls.length, 0);
   }
-  flushSse(st);
-  assert.ok(st.reasoningHead.length <= 1500);
-  assert.ok(st.reasoningLen > 4000);
+});
+test('isBlank:空正文且无工具调用才算空', () => {
+  assert.equal(isBlank({ content: '', toolCalls: [] }), true);
+  assert.equal(isBlank({ content: '   ', toolCalls: [] }), true);
+  assert.equal(isBlank({ content: 'ok', toolCalls: [] }), false);
+  assert.equal(isBlank({ content: '', toolCalls: [{ function: { name: 'calc' } }] }), false);
+});
+test('降级提示词存在且要求直接给答案', () => {
+  assert.ok(RETRY_NUDGE.includes('简体中文'));
+  assert.ok(RETRY_NUDGE.length > 20);
 });
 
 // ===========================================================================
+// 7.5 联网搜索适配层
+// ===========================================================================
+test('detectProvider:识别常见搜索服务', () => {
+  assert.equal(detectProvider('https://metaso.cn/api/v1/search'), 'metaso');
+  assert.equal(detectProvider('https://api.exa.ai/search'), 'exa');
+  assert.equal(detectProvider('https://api.tavily.com/search'), 'tavily');
+  assert.equal(detectProvider('https://google.serper.dev/search'), 'serper');
+  assert.equal(detectProvider('https://api.search.brave.com/res/v1/web/search'), 'brave');
+  assert.equal(detectProvider('https://api.bing.microsoft.com/v7.0/search'), 'bing');
+  assert.equal(detectProvider('https://www.googleapis.com/customsearch/v1'), 'google');
+  assert.equal(detectProvider('https://serpapi.com/search.json'), 'serpapi');
+  assert.equal(detectProvider('https://my-search.example.com/api'), 'generic');
+  assert.equal(detectProvider('这不是网址'), 'generic');
+});
+test('buildRequest:POST 型服务商', () => {
+  const r = buildRequest('metaso', { url: 'https://metaso.cn/api/v1/search', key: 'K', query: '天气', count: 3 });
+  assert.equal(r.init.method, 'POST');
+  assert.equal(r.init.headers.Authorization, 'Bearer K');
+  assert.equal(JSON.parse(r.init.body).q, '天气');
+  assert.equal(JSON.parse(r.init.body).size, 3);
+});
+test('buildRequest:GET 型服务商把参数拼进 URL', () => {
+  const r = buildRequest('brave', { url: 'https://api.search.brave.com/res/v1/web/search', key: 'K', query: 'a b', count: 2 });
+  assert.equal(r.init.method, 'GET');
+  assert.ok(r.url.includes('q=a+b') || r.url.includes('q=a%20b'));
+  assert.equal(r.init.headers['X-Subscription-Token'], 'K');
+  const g = buildRequest('google', { url: 'https://www.googleapis.com/customsearch/v1', key: 'K', query: 'x', count: 1 });
+  assert.ok(g.url.includes('key=K'));
+});
+test('buildRequest:条数被夹在 1..10', () => {
+  const many = buildRequest('tavily', { url: 'https://api.tavily.com/search', key: 'K', query: 'x', count: 999 });
+  assert.equal(JSON.parse(many.init.body).max_results, 10);
+});
+test('extractResults:各家返回结构', () => {
+  const cases = [
+    ['metaso', { webpages: [{ title: 'T', link: 'https://a.com', snippet: 'S' }] }],
+    ['exa', { results: [{ title: 'T', url: 'https://a.com', text: 'S' }] }],
+    ['tavily', { results: [{ title: 'T', url: 'https://a.com', content: 'S' }] }],
+    ['serper', { organic: [{ title: 'T', link: 'https://a.com', snippet: 'S' }] }],
+    ['brave', { web: { results: [{ title: 'T', url: 'https://a.com', description: 'S' }] } }],
+    ['bing', { webPages: { value: [{ name: 'T', url: 'https://a.com', snippet: 'S' }] } }],
+    ['google', { items: [{ title: 'T', link: 'https://a.com', snippet: 'S' }] }],
+    ['serpapi', { organic_results: [{ title: 'T', link: 'https://a.com', snippet: 'S' }] }],
+  ];
+  for (const [provider, json] of cases) {
+    const r = extractResults(provider, json, 5);
+    assert.equal(r.length, 1, provider);
+    assert.equal(r[0].url, 'https://a.com', provider);
+    assert.equal(r[0].title, 'T', provider);
+    assert.equal(r[0].snippet, 'S', provider);
+  }
+});
+test('extractResults:未知结构也能从 JSON 里抠出来', () => {
+  const r = extractResults('generic', { data: { list: [{ headline: 'H', href: 'https://x.com/1', abstract: 'A' }] } }, 5);
+  assert.equal(r.length, 1);
+  assert.equal(r[0].url, 'https://x.com/1');
+  assert.equal(r[0].title, 'H');
+});
+test('extractResults:去重并限制条数', () => {
+  const json = { results: [
+    { url: 'https://a.com', title: '1' },
+    { url: 'https://a.com#frag', title: '2' },
+    { url: 'https://b.com', title: '3' },
+    { url: 'https://c.com', title: '4' },
+  ] };
+  assert.equal(extractResults('exa', json, 5).length, 3);
+  assert.equal(extractResults('exa', json, 2).length, 2);
+});
+test('extractResults:没有结果时返回空数组', () => {
+  assert.equal(extractResults('exa', {}, 5).length, 0);
+  assert.equal(extractResults('exa', { results: [] }, 5).length, 0);
+});
+test('SUPPORTED_PROVIDERS 覆盖文档里承诺的服务商', () => {
+  for (const p of ['metaso', 'exa', 'tavily', 'serper', 'brave', 'bing', 'google', 'serpapi', 'generic']) {
+    assert.ok(SUPPORTED_PROVIDERS.includes(p), p);
+  }
+});
+
 // 8. 文件校验 / SSRF
 // ===========================================================================
 const CFG = loadConfig({});
@@ -439,7 +487,7 @@ test('splitSitePath:中文 ID 能正确解码', () => {
 test('工具定义合法且包含关键工具', () => {
   const tools = buildTools(CFG);
   const names = tools.map((t) => t.function.name);
-  for (const need of ['deploy_site', 'update_site', 'list_sites', 'read_site', 'delete_site', 'web_search', 'fetch_url', 'query_dashboard', 'calc', 'now']) {
+  for (const need of ['deploy_site', 'update_site', 'list_sites', 'read_site', 'delete_site', 'web_search', 'fetch_url', 'calc', 'now']) {
     assert.ok(names.includes(need), `缺少工具 ${need}`);
   }
   for (const t of tools) {
@@ -464,39 +512,50 @@ test('帮助文本包含全部命令', () => {
 // ===========================================================================
 // 13. 配置
 // ===========================================================================
-test('loadConfig:默认值', () => {
-  const c = loadConfig({});
+test('loadConfig:变量表就是这 7 个', () => {
+  assert.deepEqual(ALL_VARS, [
+    'QQ_APP_ID', 'QQ_APP_SECRET', 'LLM_BASE_URL', 'LLM_API_KEY',
+    'SEARCH_API_URL', 'SEARCH_API_KEY', 'PUBLIC_BASE_URL',
+  ]);
+});
+test('loadConfig:读取变量并去掉 URL 尾部斜杠', () => {
+  const c = loadConfig({
+    QQ_APP_ID: '100000001',
+    QQ_APP_SECRET: 's',
+    LLM_BASE_URL: 'https://api.example.com/v1/',
+    LLM_API_KEY: 'k',
+    SEARCH_API_URL: 'https://metaso.cn/api/v1/search',
+    SEARCH_API_KEY: 'sk',
+    PUBLIC_BASE_URL: 'https://ai.example.com/',
+  });
+  assert.equal(c.appId, '100000001');
+  assert.equal(c.llmBaseUrl, 'https://api.example.com/v1');
+  assert.equal(c.publicBaseUrl, 'https://ai.example.com');
+  assert.equal(c.searchApiUrl, 'https://metaso.cn/api/v1/search');
+  assert.equal(c.searchApiKey, 'sk');
+  assert.equal(missingVars(c).length, 0);
+});
+test('loadConfig:空白字符会被当成没填', () => {
+  const c = loadConfig({ QQ_APP_ID: '   ', LLM_API_KEY: '' });
+  assert.equal(c.appId, '');
+  assert.deepEqual(missingVars(c), ['QQ_APP_ID', 'QQ_APP_SECRET', 'LLM_BASE_URL', 'LLM_API_KEY']);
+});
+test('loadConfig:固定参数不受环境变量影响', () => {
+  const c = loadConfig({ DEPLOY_MAX_SITES: '99', LLM_MODEL: 'gpt-4', LLM_MAX_TOKENS: '10' });
+  assert.equal(c.maxSites, 6);
   assert.equal(c.llmModel, 'deepseek-v4.1-flash');
   assert.equal(c.reasoningEffort, 'max');
-  assert.equal(c.maxSites, 6);
   assert.equal(c.siteTtlSeconds, 600);
   assert.equal(c.idLen, 8);
+  assert.equal(c.idCharset, 'ascii');
+  assert.equal(c.maxTokens, undefined);
 });
-test('loadConfig:字符串覆盖与数值夹取', () => {
-  const c = loadConfig({ DEPLOY_MAX_SITES: '3', DEPLOY_TTL_SECONDS: '5', LLM_MAX_TOKENS: 'abc', VERIFY_SIGNATURE: 'false' });
-  assert.equal(c.maxSites, 3);
-  assert.equal(c.siteTtlSeconds, 60, '不能低于 60 秒');
-  assert.equal(c.maxTokens, 0, '非法值 = 不限制(不带 max_tokens)');
-  assert.equal(c.verifySignature, false);
+test('loadConfig:空环境也能构造出可用的默认对象', () => {
+  const c = loadConfig();
+  assert.equal(c.webhookPath, '/qq/webhook');
+  assert.equal(c.apiBase, 'https://api.bot.qq.com');
+  assert.ok(c.agentBudgetMs <= 5 * 60 * 1000, '总预算必须小于 QQ 被动回复窗口');
 });
-test('loadConfig:输出上限默认不限制', () => {
-  assert.equal(loadConfig({}).maxTokens, 0);
-  assert.equal(loadConfig({ LLM_MAX_TOKENS: '' }).maxTokens, 0);
-  assert.equal(loadConfig({ LLM_MAX_TOKENS: 'none' }).maxTokens, 0);
-  assert.equal(loadConfig({ LLM_MAX_TOKENS: '0' }).maxTokens, 0);
-  assert.equal(loadConfig({ LLM_MAX_TOKENS: '8192' }).maxTokens, 8192);
-  assert.equal(loadConfig({ LLM_MAX_TOKENS: '999999999' }).maxTokens, 200000, '上限夹取');
-});
-test('loadConfig:布尔真值', () => {
-  for (const v of ['1', 'true', 'TRUE', 'yes', 'on']) assert.equal(loadConfig({ VERIFY_SIGNATURE: v }).verifySignature, true);
-  for (const v of ['0', 'no', 'off', '']) assert.equal(loadConfig({ VERIFY_SIGNATURE: v }).verifySignature, false);
-});
-test('loadConfig:去掉 URL 尾部斜杠', () => {
-  assert.equal(loadConfig({ LLM_BASE_URL: 'https://x/y/' }).llmBaseUrl, 'https://x/y');
-  assert.equal(loadConfig({ PUBLIC_BASE_URL: 'https://a.b/' }).publicBaseUrl, 'https://a.b');
-});
-
-// ===========================================================================
 console.log(`\n${'='.repeat(60)}`);
 if (fail === 0) {
   console.log(`✅ 全部通过:${pass} 项`);

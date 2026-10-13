@@ -67,6 +67,11 @@ export class FakeDONamespace {
       };
       const obj = new BotCore(ctx, this.env);
       obj.__ctx = ctx;
+      if (this.env.QQ_API_BASE) {
+        const base = String(this.env.QQ_API_BASE).replace(/\/+$/, '');
+        obj.cfg.apiBase = base;
+        obj.cfg.tokenUrl = `${base}/app/getAppAccessToken`;
+      }
       this.instances.set(id, obj);
     }
     const obj = this.instances.get(id);

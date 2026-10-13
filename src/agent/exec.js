@@ -1,19 +1,11 @@
-// 工具的实际执行。所有返回值都是「给模型看的中文文本」。
-// 约定:出错不要抛异常给上层,而是返回一句说明,让模型自己决定怎么补救。
-
 import { calc, formatNumber } from '../util/calc.js';
-import { htmlToText, parseSearchResults } from '../util/html.js';
+import { htmlToText } from '../util/html.js';
 import { truncate } from '../util/text.js';
+import { webSearch } from './search.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
-const SEARCH_PROVIDERS = [
-  { name: 'DuckDuckGo', build: (q) => `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(q)}` },
-  { name: 'DuckDuckGo', build: (q) => `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}` },
-  { name: 'Bing', build: (q) => `https://cn.bing.com/search?q=${encodeURIComponent(q)}&ensearch=0` },
-  { name: 'Bing', build: (q) => `https://www.bing.com/search?q=${encodeURIComponent(q)}` },
-  { name: '搜狗', build: (q) => `https://www.sogou.com/web?query=${encodeURIComponent(q)}` },
-];
+const TOOL_LIST = 'calc, now, web_search, fetch_url, deploy_site, update_site, list_sites, read_site, delete_site';
 
 function fmtTime(d, offsetHours) {
   const t = new Date(d.getTime() + offsetHours * 3600_000);
@@ -72,33 +64,6 @@ async function fetchText(url, { timeoutMs = 20000, maxBytes = 800000 } = {}) {
   }
 }
 
-async function doWebSearch(query, count) {
-  const n = Math.max(1, Math.min(8, count || 5));
-  const tried = [];
-  for (const p of SEARCH_PROVIDERS) {
-    try {
-      const html = await fetchText(p.build(query), { timeoutMs: 15000, maxBytes: 600000 });
-      const items = parseSearchResults(html, n);
-      if (items.length) {
-        const lines = items.map((it, i) =>
-          `${i + 1}. ${it.title || '(无标题)'}\n   ${it.url}${it.snippet ? `\n   ${truncate(it.snippet, 200)}` : ''}`);
-        return `搜索「${query}」(来源:${p.name})\n${lines.join('\n')}`;
-      }
-      tried.push(`${p.name}: 没解析出结果`);
-    } catch (e) {
-      tried.push(`${p.name}: ${e.message}`);
-    }
-  }
-  return `联网搜索失败,没有拿到结果。已尝试:\n${tried.join('\n')}\n`
-    + '可以改用 fetch_url 直接抓一个你知道的网址,或者凭已有知识回答并说明无法联网。';
-}
-
-/**
- * @param {string} name 工具名
- * @param {object} args 模型给的参数
- * @param {object} ctx  { cfg, core, convId }
- * @returns {Promise<string>}
- */
 export async function executeTool(name, args, ctx) {
   const a = args && typeof args === 'object' ? args : {};
   try {
@@ -115,42 +80,17 @@ export async function executeTool(name, args, ctx) {
       }
 
       case 'web_search':
-        return await doWebSearch(String(a.query || ''), a.count);
+        return await webSearch(ctx.cfg, String(a.query || ''), a.count);
 
       case 'fetch_url': {
         const u = assertPublicUrl(a.url);
         const maxChars = Math.max(500, Math.min(12000, Number(a.max_chars) || 4000));
         const raw = await fetchText(u.toString());
-        const text = raw.trimStart().startsWith('{') || raw.trimStart().startsWith('[')
+        const head = raw.trimStart();
+        const text = head.startsWith('{') || head.startsWith('[')
           ? truncate(raw, maxChars)
           : htmlToText(raw, maxChars);
         return `来自 ${u.toString()} 的正文:\n${text}`;
-      }
-
-      case 'query_dashboard': {
-        const res = await fetch(ctx.cfg.dashboardUrl, {
-          headers: { 'Authorization': `Bearer ${ctx.cfg.llmApiKey}`, 'User-Agent': UA },
-        });
-        if (!res.ok) return `查询中转站失败: HTTP ${res.status}`;
-        const d = await res.json();
-        const rt = d?.data?.realtime || {};
-        const recent = Array.isArray(d?.data?.recent) ? d.data.recent.slice(0, 5) : [];
-        const lines = [
-          '中转站实时数据:',
-          `  总额度: ${rt.all_quota ?? '?'}`,
-          `  累计请求: ${rt.all_requests ?? '?'}`,
-          `  累计 token: ${rt.all_tokens ?? '?'}`,
-          `  近 5 分钟: ${rt.last300_req ?? '?'} 次请求 / ${rt.last300_tokens ?? '?'} tokens`,
-          `  近 1 分钟: ${rt.last60_req ?? '?'} 次请求 / ${rt.last60_tokens ?? '?'} tokens`,
-          `  近 5 分钟活跃用户: ${rt.last300_active_users ?? '?'}`,
-        ];
-        if (recent.length) {
-          lines.push('最近调用:');
-          for (const r of recent) {
-            lines.push(`  #${r.id} ${r.model_name} ${r.tokens} tokens 用户 ${r.username}`);
-          }
-        }
-        return lines.join('\n');
       }
 
       case 'deploy_site': {
@@ -163,7 +103,7 @@ export async function executeTool(name, args, ctx) {
         });
         if (r.error) return r.error;
         return [
-          `部署成功 ✅`,
+          '部署成功 ✅',
           `项目名: ${r.site.name}`,
           `链接: ${r.site.url}`,
           `ID: ${r.site.id}`,
@@ -171,7 +111,7 @@ export async function executeTool(name, args, ctx) {
           `存活: 从现在起 ${Math.round(ctx.cfg.siteTtlSeconds / 60)} 分钟,期间任何修改都会重新计时`,
           `当前在线部署: ${r.count}/${ctx.cfg.maxSites}`,
           r.evicted ? `⚠️ 已自动清理最久未改动的部署 ${r.evicted.id}(${r.evicted.name})以腾出名额` : '',
-          `【重要】请把上面这个链接原样发在回复里,并简单说明怎么玩。`,
+          '【重要】请把上面这个链接原样发在回复里,并简单说明怎么玩。',
         ].filter(Boolean).join('\n');
       }
 
@@ -183,7 +123,7 @@ export async function executeTool(name, args, ctx) {
           `修改成功 ✅ 链接不变: ${r.site.url}`,
           `文件: ${r.site.files.map((f) => f.path).join(', ')}`,
           `倒计时已重置为 ${Math.round(ctx.cfg.siteTtlSeconds / 60)} 分钟`,
-          `【重要】请把链接原样告诉用户。`,
+          '【重要】请把链接原样告诉用户。',
         ].join('\n');
       }
 
@@ -210,7 +150,7 @@ export async function executeTool(name, args, ctx) {
         }
         return [
           `${r.name}(${r.id}) ${r.url}`,
-          `文件清单:`,
+          '文件清单:',
           ...r.files.map((f) => `--- ${f.path} (${f.content.length} 字) ---\n${truncate(f.content, 800)}`),
         ].join('\n');
       }
@@ -221,14 +161,13 @@ export async function executeTool(name, args, ctx) {
       }
 
       default:
-        return `没有名为 ${name} 的工具。可用工具:calc, now, web_search, fetch_url, query_dashboard, deploy_site, update_site, list_sites, read_site, delete_site。`;
+        return `没有名为 ${name} 的工具。可用工具:${TOOL_LIST}。`;
     }
   } catch (e) {
     return `工具 ${name} 执行失败: ${e?.message || e}`;
   }
 }
 
-/** 校验并规范化模型给的文件列表 */
 export function normaliseFiles(files, cfg) {
   if (!Array.isArray(files) || files.length === 0) {
     throw new Error('files 不能为空,至少要有一个 index.html');
@@ -237,7 +176,7 @@ export function normaliseFiles(files, cfg) {
   const out = [];
   let total = 0;
   for (const f of files) {
-    let path = String(f?.path ?? '').trim().replace(/^\.\//, '');
+    const path = String(f?.path ?? '').trim().replace(/^\.\//, '');
     if (!path) throw new Error('文件路径不能为空');
     if (path.startsWith('/') || path.includes('..') || path.includes('\\')) {
       throw new Error(`非法路径 ${path}`);

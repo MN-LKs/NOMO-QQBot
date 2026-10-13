@@ -34,22 +34,15 @@
 
 实测不到 3 ms。重活全在 DO 里,DO 有 30 秒 CPU 预算。
 
-### 2. SSE 解析做了「快路径」
+### 2. 用非流式请求,一次拿完
 
-`reasoning_effort=max` 遇到难题时,一次回答能吐 **2.5 MB / 16000+ 个分片**,
-如果每个分片都 `JSON.parse`,CPU 直接爆。
+QQ 消息本身不支持流式输出,流式拿到的分片最终也只能攒成一段文本再发出去。
+所以这里统一发非流式请求:一次响应、一次 `JSON.parse`,CPU 占用比逐分片解析低一个量级。
 
-所以解析器先做纯字符串扫描:
+### 2.5 解析尽量少做无用功
 
-```js
-// 纯思考分片:只判断「这个字段是不是非空字符串」,不做 JSON.parse
-if (hasNonEmptyString(payload, 'reasoning_content') && !hasNonEmptyString(payload, 'content')) {
-  st.reasoningLen += span.end - span.start;   // 一次线性扫描,不构造对象
-  return;
-}
-```
-
-实测 16000 个分片里,需要真正 `JSON.parse` 的不到 300 个。
+响应里真正要用的是 `content`、`reasoning_content`、`tool_calls` 和 `usage` 四个字段,
+解析函数只做这一件事,不遍历、不复制大字符串。
 
 ### 3. 思考日志只留前 1500 字
 
@@ -58,8 +51,8 @@ if (hasNonEmptyString(payload, 'reasoning_content') && !hasNonEmptyString(payloa
 
 ### 4. 上下文有上限
 
-- 每个会话只保留最近 12 条消息(`CTX_KEEP_MESSAGES`)
-- 超过 6000 字自动压缩成摘要(`CTX_COMPRESS_CHARS`)
+- 每个会话只保留最近 12 条消息
+- 超过 6000 字自动压缩成摘要(阈值在 `src/config.js`)
 - 部署代码单站点上限 200 KB
 
 ## 三、为什么不会「持续占用资源」
@@ -82,8 +75,8 @@ Durable Object 是**按需唤醒**的:
 
 如果真的把页面分享出去被疯狂访问,可以:
 
-1. 缩短 `DEPLOY_TTL_SECONDS`(最少 60 秒)
-2. 减小 `DEPLOY_MAX_SITES`
+1. 缩短部署存活时长
+2. 减少同时在线部署名额(都在 `src/config.js` 的 `FIXED` 里)
 3. 给部署页面加 CDN 缓存(改 `src/serve.js` 里的 `Cache-Control`)
 
 ## 五、真正会先耗尽的不是 Cloudflare
@@ -96,7 +89,7 @@ Durable Object 是**按需唤醒**的:
 - 1~5 次 QQ 发消息
 
 **上游大模型网关的额度会先见底**,不是 Cloudflare。
-用 `/admin/status` 或者直接问机器人「还剩多少额度」就能看到。
+在 Cloudflare 后台看 Workers 用量,或者在你自己的上游网关后台看额度消耗。
 
 ## 六、如果还是不够用
 
@@ -104,7 +97,7 @@ Durable Object 是**按需唤醒**的:
 
 - 免费服务器通常有**休眠策略**(闲置就睡),而 QQ 的 WebSocket 长连接会被掐断
 - 如果改用 WebSocket 模式(而不是 Webhook),就需要一个常驻进程,
-  Cloudflare Workers 做不了(它没有常驻事件循环)
+  而且 Durable Object 一直醒着会吃掉免费时长的绝大部分
 - 本项目刻意选了 **Webhook + Durable Object 闹钟** 这套无状态方案,
   就是为了「没人用的时候一点资源都不占」
 

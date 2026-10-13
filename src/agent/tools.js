@@ -1,5 +1,3 @@
-// 给模型看的工具定义。描述写详细一点,小模型全靠 description 判断什么时候调。
-
 export function buildTools(cfg) {
   const maxSites = cfg.maxSites;
   const ttlMin = Math.round(cfg.siteTtlSeconds / 60);
@@ -51,7 +49,7 @@ export function buildTools(cfg) {
         parameters: {
           type: 'object',
           properties: {
-            id: { type: 'string', description: '部署 ID(8 个字符,包含中英文)' },
+            id: { type: 'string', description: '部署 ID(8 位英文数字,例如 ab3k9m2p)' },
             name: { type: 'string', description: '可选,顺便改个项目名' },
             files: {
               type: 'array',
@@ -109,7 +107,7 @@ export function buildTools(cfg) {
       type: 'function',
       function: {
         name: 'web_search',
-        description: '联网搜索。需要最新消息、实时数据、你不确定的事实时调用。返回标题/网址/摘要。',
+        description: '联网搜索。需要最新消息、实时数据、你不确定的事实时调用。返回标题、网址和摘要。',
         parameters: {
           type: 'object',
           properties: {
@@ -133,14 +131,6 @@ export function buildTools(cfg) {
           },
           required: ['url'],
         },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'query_dashboard',
-        description: '查询当前 AI 中转站的实时用量:总额度、已用请求数、token 数、最近调用记录。用户问「还剩多少额度」时用。',
-        parameters: { type: 'object', properties: {} },
       },
     },
     {
@@ -170,6 +160,3 @@ export function buildTools(cfg) {
     },
   ];
 }
-
-export const TOOL_NAMES = buildTools({ maxSites: 6, siteTtlSeconds: 600 })
-  .map((t) => t.function.name);

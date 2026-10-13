@@ -38,25 +38,20 @@ npx wrangler deploy
 
 到 **Workers & Pages → 你的 Worker → Settings → Variables and Secrets** 逐个添加:
 
-| 变量 | 类型 | 说明 |
-|---|---|---|
-| `QQ_APP_ID` | 文本 | 机器人 AppID |
-| `QQ_APP_SECRET` | **Secret** | 机器人 AppSecret |
-| `WEBHOOK_SECRET` | **Secret** | 自己生成一串随机字符,会拼进回调地址 |
-| `LLM_BASE_URL` | 文本 | 上游网关,例如 `https://api.example.com/v1` |
-| `LLM_API_KEY` | **Secret** | 上游 API Key |
-| `PUBLIC_BASE_URL` | 文本 | 部署链接的域名,例如 `https://ai.example.com` |
-| `DASHBOARD_URL` | 文本 | 用量查询接口(可选) |
-| `ADMIN_TOKEN` | **Secret** | 管理接口口令(可选) |
+| 变量 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `QQ_APP_ID` | 文本 | ✅ | 机器人 AppID |
+| `QQ_APP_SECRET` | **Secret** | ✅ | 机器人 AppSecret |
+| `LLM_BASE_URL` | 文本 | ✅ | 上游网关,例如 `https://api.example.com/v1` |
+| `LLM_API_KEY` | **Secret** | ✅ | 上游 API Key |
+| `SEARCH_API_URL` | 文本 | — | 联网搜索接口,不填则搜索不可用 |
+| `SEARCH_API_KEY` | **Secret** | — | 联网搜索密钥 |
+| `PUBLIC_BASE_URL` | 文本 | — | 部署链接的域名,例如 `https://ai.example.com` |
+
+**就这 7 个。** 模型名、思考档位、部署名额、存活时长这些固定参数写在 `src/config.js` 里,不用配。
 
 > 用 GitHub 联动部署时,这些变量**不会**从仓库带过去,必须在 Cloudflare 后台配一次,之后一直有效。
 > 命令行也行:`npx wrangler secret put QQ_APP_SECRET` 等等。
-
-生成一个随机口令:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
-```
 
 填完打开 `https://<你的地址>/check`,**缺哪一项它会直接列出来**。
 
@@ -65,13 +60,13 @@ node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
 
 ## 三、配置 QQ 回调地址
 
-1. 部署完在 Workers 列表里能看到地址:`https://qqbot-nb-api.<子域>.workers.dev`
+1. 部署完在 Workers 列表里能看到地址:`https://npapi.<子域>.workers.dev`
 2. 打开 `https://<这个地址>/check`,先确认自检全绿
 3. 到 [QQ 机器人管理端](https://q.qq.com/qqbot) → 开发设置 → **回调配置**
 4. 填入:
 
    ```
-   https://qqbot-nb-api.<子域>.workers.dev/qq/webhook/<WEBHOOK_SECRET>
+   https://npapi.<子域>.workers.dev/qq/webhook
    ```
 
 5. 监听事件至少勾上:
@@ -82,7 +77,6 @@ node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
 
 > **验证一直失败怎么办?**
 > 1. 打开 `/check`,看 `回调地址` 那一行给出的完整地址,直接复制它
-> 2. 确认 `WEBHOOK_SECRET` 和地址里的口令一致
 > 3. 确认 Workers 已经部署成功(访问 `/health` 应该返回 `{"ok":true}`)
 > 4. 用 `npx wrangler tail` 看有没有收到请求
 
@@ -119,7 +113,7 @@ node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
    ```
 
 3. 重新部署。Cloudflare 会自动给这个子域签发证书
-4. 之后回调地址也可以换成 `https://ai.example.com/qq/webhook/<WEBHOOK_SECRET>`
+4. 之后回调地址也可以换成 `https://ai.example.com/qq/webhook`
 
 > 域名下的所有路径都归这个 Worker,包括 `/qq/webhook`、`/check` 和部署出来的页面。
 > 项目已经保留了 `qq`、`api`、`admin`、`health`、`check` 等保留字,部署 ID 不会撞车。
@@ -143,7 +137,7 @@ cf-mitigated: challenge
 那就是被质询拦了。这个头只要出现,机器人的回调就一定收不到。
 
 ```bash
-curl -i -X POST https://ai.example.com/qq/webhook/<WEBHOOK_SECRET> \
+curl -i -X POST https://ai.example.com/qq/webhook \
      -H 'User-Agent: QQBot-Callback' -H 'Content-Type: application/json' -d '{}'
 ```
 
@@ -180,7 +174,7 @@ curl -i -X POST https://ai.example.com/qq/webhook/<WEBHOOK_SECRET> \
 | 现象 | 原因 / 处理 |
 |---|---|
 | 群里 @ 了没反应,日志里也一条都没有 | 域名开着 Cloudflare 质询,请求被拦在 Worker 之前 —— 见「四点五」 |
-| 回调保存时提示校验失败 | 地址或 `WEBHOOK_SECRET` 不对;看 `/check` |
+| 回调保存时提示校验失败 | 回调地址填错,或者 `QQ_APP_SECRET` 不对;看 `/check` |
 | 群里 @ 了没反应 | 开放平台没勾选 `GROUP_AT_MESSAGE_CREATE` 事件;或机器人没进群 |
 | 日志里 `[验签失败] signature invalid` | `QQ_APP_SECRET` 填错了 |
 | 回复「😵 处理这条消息时出错了」 | 看 `wrangler tail`,通常是上游网关 504 / 额度用完 |

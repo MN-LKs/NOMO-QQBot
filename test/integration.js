@@ -11,11 +11,11 @@ import path from 'node:path';
 import { startMock } from './mock-upstream.js';
 import { makeEnv, makeCtx, startAlarmRunner } from './harness.js';
 import { keysFromSecret } from '../src/qq/sign.js';
+import { executeTool } from '../src/agent/exec.js';
 import { bytesToHex, concatBytes, utf8 } from '../src/util/bytes.js';
 
 const MOCK = 'http://127.0.0.1:8790';
 const BASE = 'http://bot.test';
-const SECRET = 'test-secret-abc';
 const APP_SECRET = 'test-app-secret-not-real-0123456789';
 
 let pass = 0, fail = 0;
@@ -80,7 +80,7 @@ function groupEvent(text) {
   };
 }
 
-async function postWebhook(payload, { signIt = true, secret = SECRET, tamper = null } = {}) {
+async function postWebhook(payload, { signIt = true, tamper = null } = {}) {
   let body = typeof payload === 'string' ? payload : JSON.stringify(payload);
   if (tamper) body = tamper(body);
   const ts = String(Math.floor(Date.now() / 1000));
@@ -89,7 +89,7 @@ async function postWebhook(payload, { signIt = true, secret = SECRET, tamper = n
     headers['X-Signature-Ed25519'] = await signBody(ts, body);
     headers['X-Signature-Timestamp'] = ts;
   }
-  const res = await req(`/qq/webhook/${secret}`, { method: 'POST', headers, body });
+  const res = await req('/qq/webhook', { method: 'POST', headers, body });
   const text = await res.text();
   let j = null;
   try { j = JSON.parse(text); } catch { /* ignore */ }
@@ -118,19 +118,15 @@ async function main() {
   mock = await startMock({ llmPort: 8790 });
 
   env = makeEnv({
-    LLM_BASE_URL: `${MOCK}/v1`,
-    QQ_API_BASE: MOCK,
-    QQ_TOKEN_URL: `${MOCK}/app/getAppAccessToken`,
-    PUBLIC_BASE_URL: BASE,
-    WEBHOOK_SECRET: SECRET,
-    ADMIN_TOKEN: 'test-admin',
-    VERIFY_SIGNATURE: 'true',
-    DEPLOY_MAX_SITES: '6',
-    DEPLOY_TTL_SECONDS: '600',
     QQ_APP_ID: '100000001',
     QQ_APP_SECRET: APP_SECRET,
+    LLM_BASE_URL: `${MOCK}/v1`,
     LLM_API_KEY: 'mock-key',
-    LLM_MODEL: 'deepseek-v4.1-flash',
+    SEARCH_API_URL: `${MOCK}/search`,
+    SEARCH_API_KEY: 'mock-search-key',
+    PUBLIC_BASE_URL: BASE,
+    QQ_API_BASE: MOCK,
+    QQ_TOKEN_URL: `${MOCK}/app/getAppAccessToken`,
   });
   ctx = makeCtx();
   alarmRunner = startAlarmRunner(env);
@@ -156,13 +152,20 @@ async function main() {
     assertEq((await req('/no/such/path')).status, 404);
   });
 
-  await t('/admin/* 需要 ADMIN_TOKEN', async () => {
-    assertEq((await req('/admin/status')).status, 403);
-    assertEq((await req('/admin/status?token=wrong')).status, 403);
-    assertEq((await req('/admin/status?token=test-admin')).status, 200);
-    const d = await (await req('/admin/sites?token=test-admin')).json();
-    assertEq(d.count, 0);
-    assertEq(d.max, 6);
+  await t('/check 列出了全部 7 个变量', async () => {
+    const d = await (await req('/check')).json();
+    assertEq(d.variables.length, 7);
+    assert(d.variables.includes('SEARCH_API_URL'));
+    assertEq(d.notes.length, 0, '变量齐全时不应有缺项提示');
+  });
+
+  await t('必填变量缺失时 /check 返回 500 并点名', async () => {
+    const mod = await import('../src/index.js');
+    const bare = { BOT_CORE: env.BOT_CORE };
+    const res = await mod.default.fetch(new Request('http://bot.test/check'), bare, ctx);
+    assertEq(res.status, 500);
+    const d = await res.json();
+    assert(d.notes.join(' ').includes('LLM_API_KEY'), '应点名缺 LLM_API_KEY');
   });
 
   console.log('\n=== 2. 回调安全 ===');
@@ -190,7 +193,7 @@ async function main() {
     const ts = String(Math.floor(Date.now() / 1000));
     const sig = await signBody(ts, original);          // 对原始 body 签名
     const tampered = original.replace('/帮助', '/删库跑路'); // 但发送篡改后的 body
-    const res = await req(`/qq/webhook/${SECRET}`, {
+    const res = await req('/qq/webhook', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -200,11 +203,6 @@ async function main() {
       body: tampered,
     });
     assertEq(res.status, 401);
-  });
-
-  await t('回调口令不对 -> 404', async () => {
-    const r = await postWebhook({ op: 0, t: 'X', d: {} }, { secret: 'nope' });
-    assertEq(r.status, 404);
   });
 
   await t('事件去重:同一条推送发两次只处理一次', async () => {
@@ -235,6 +233,13 @@ async function main() {
     const { text } = await say('/状态');
     assert(text.includes('在线部署'), `状态内容不对: ${text.slice(0, 200)}`);
     assert(text.includes('deepseek-v4.1-flash'));
+  });
+
+  await t('联网搜索工具走配置的服务商', async () => {
+    const core = env.BOT_CORE.core('core');
+    const out = await executeTool('web_search', { query: '测试', count: 2 }, { cfg: core.cfg, core, convId: 'test' });
+    assert(out.includes('example.com/one'), `应包含假搜索结果: ${out}`);
+    assert(out.includes('搜索结果一'), out);
   });
 
   console.log('\n=== 4. Agent 全链路 + 部署 ===');
@@ -286,27 +291,26 @@ async function main() {
     assert((await r.text()).includes('项目不在了'));
   });
 
-  await t('管理员能列出部署详情(含剩余秒数)', async () => {
-    const d = await (await req('/admin/sites?token=test-admin')).json();
-    assertEq(d.count, 1, `实际有 ${d.count} 个: ${JSON.stringify(d.sites.map((x) => x.name))}`);
-    assert(d.sites[0].expiresInSeconds > 500 && d.sites[0].expiresInSeconds <= 600,
-      `剩余时间应在 600 秒内: ${d.sites[0].expiresInSeconds}`);
-    assertEq(d.sites[0].files.join(','), 'index.html');
+  await t('能列出部署详情(含剩余秒数)', async () => {
+    const sites = env.BOT_CORE.core('core').listSites();
+    assertEq(sites.length, 1, `实际有 ${sites.length} 个`);
+    const left = Math.round((sites[0].expiresAt - Date.now()) / 1000);
+    assert(left > 500 && left <= 600, `剩余时间应在 600 秒内: ${left}`);
+    assertEq(sites[0].files.map((f) => f.path).join(','), 'index.html');
   });
 
   console.log('\n=== 5. 名额上限与淘汰 ===');
   await t('连续部署到 7 个:总数卡在 6', async () => {
     for (let i = 0; i < 6; i++) await say(`再做一个测试网页 ${i}`);
-    const d = await (await req('/admin/sites?token=test-admin')).json();
-    assertEq(d.count, 6, `站点数应被限制在 6,实际 ${d.count}`);
+    const n = env.BOT_CORE.core('core').listSites().length;
+    assertEq(n, 6, `站点数应被限制在 6,实际 ${n}`);
   });
 
   await t('淘汰的是「最久没改动」的那个,且会告知用户', async () => {
     const firstUrl = deployUrl;
     const { text } = await say('再做最后一个网页');
     assert(text.includes('自动清理') || text.includes('最久'), `应提示淘汰: ${text.slice(0, 300)}`);
-    const d = await (await req('/admin/sites?token=test-admin')).json();
-    assertEq(d.count, 6);
+    assertEq(env.BOT_CORE.core('core').listSites().length, 6);
     assertEq((await req(firstUrl.replace(BASE, ''))).status, 404, '最早的那个应已失效');
   });
 
@@ -334,11 +338,10 @@ async function main() {
     assertEq(core.getSite(victim.id), null, '过期站点应被删除');
   });
 
-  await t('管理员可以手动删除部署', async () => {
+  await t('delete_site 能删掉部署', async () => {
     const core = env.BOT_CORE.core('core');
     const id = core.listSites()[0].id;
-    const r = await req(`/admin/delete?token=test-admin&id=${encodeURIComponent(id)}`);
-    assertEq(r.status, 200);
+    assertEq(core.deleteSite(id), true);
     assertEq(core.getSite(id), null);
   });
 
@@ -428,10 +431,14 @@ async function main() {
     const before = mock.calls.qqSend.length;
     const r = await postWebhook(groupEvent('帮我做个带链接的网页'));
     assertEq(r.status, 200);
-    await waitFor(() => mock.calls.qqSend.length >= before + 2, 30000, '等待降级重发');
+    const stripped = (s) => /bot\.test|ai\.example/.test(s.body.content) && !s.body.content.includes('http://');
+    await waitFor(
+      () => mock.calls.qqSend.slice(before).some(stripped),
+      30000,
+      '等待降级重发(去掉协议头的那一条)',
+    );
     const sent = mock.calls.qqSend.slice(before);
-    const retried = sent.filter((s) => s.body.content.includes('ai.example') || /bot\.test/.test(s.body.content));
-    assert(retried.some((s) => !s.body.content.includes('http://')), '降级后应去掉协议头');
+    assert(sent.some(stripped), '降级后应去掉协议头');
   });
 }
 

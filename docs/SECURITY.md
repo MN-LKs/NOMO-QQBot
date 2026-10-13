@@ -4,8 +4,9 @@
 
 这个仓库是**公开**的,所以规则很简单:**凭据一律不进仓库。**
 
-`wrangler.toml` 的 `[vars]` 里所有值都是空字符串 —— 包括 `QQ_APP_ID`、`QQ_APP_SECRET`、
-`WEBHOOK_SECRET`、`ADMIN_TOKEN`、`LLM_API_KEY`、`LLM_BASE_URL`、`DASHBOARD_URL`、`PUBLIC_BASE_URL`。
+`wrangler.toml` 的 `[vars]` 里所有值都是空字符串 —— 一共 7 个:
+`QQ_APP_ID`、`QQ_APP_SECRET`、`LLM_BASE_URL`、`LLM_API_KEY`、
+`SEARCH_API_URL`、`SEARCH_API_KEY`、`PUBLIC_BASE_URL`。
 真实值只存在两个地方:
 
 | 场景 | 放哪里 |
@@ -13,14 +14,13 @@
 | 线上 | Cloudflare 后台 → Workers & Pages → 你的 Worker → **Settings → Variables and Secrets** |
 | 本地调试 | 项目根目录的 `.dev.vars`(已经在 `.gitignore` 里,不会被提交) |
 
-在后台添加时,**密钥类的选 `Secret` 类型**(`QQ_APP_SECRET`、`LLM_API_KEY`、`WEBHOOK_SECRET`、`ADMIN_TOKEN`),
+在后台添加时,**密钥类的选 `Secret` 类型**(`QQ_APP_SECRET`、`LLM_API_KEY`、`SEARCH_API_KEY`),
 普通配置选文本即可。也可以用命令行:
 
 ```bash
 npx wrangler secret put QQ_APP_SECRET
 npx wrangler secret put LLM_API_KEY
-npx wrangler secret put WEBHOOK_SECRET
-npx wrangler secret put ADMIN_TOKEN
+npx wrangler secret put SEARCH_API_KEY
 ```
 
 ### 提交前的强制检查
@@ -47,22 +47,15 @@ CI(`.github/workflows/test.yml`)里也会跑同一份检查,所以即使本地�
 2. 再把仓库里的值改成空字符串
 3. 如果敏感程度高,考虑把仓库设为私有,或干脆重建仓库
 
-## 二、回调地址为什么要带口令
+## 二、回调地址为什么不用加口令
 
-`/qq/webhook` 是公开在互联网上的。虽然腾讯的每次推送都会做 Ed25519 验签,
-但:
+回调地址是公开在互联网上的,任何人都能往 `/qq/webhook` 发请求。但这不构成风险:
 
-- 验签失败会打日志,有人刷你的端点会白白消耗请求数
-- 万一哪天验签逻辑出问题,没有第二道防线
+- 每一次推送都要通过 **Ed25519 验签**,签名对不上直接 401,伪造的事件进不了业务逻辑
+- 验签失败只是打一条日志,不做任何计算,刷不爆额度
+- 同一条事件按 ID 去重,重放也只会被忽略
 
-所以地址里带一个 `WEBHOOK_SECRET`(形如 `/qq/webhook/我的随机串`),
-口令不对的直接 404,连日志都不打。
-
-生成一个:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"
-```
+所以这个项目刻意不加「回调口令」这类变量 —— 少一个要配的东西,安全性由签名本身保证。
 
 ## 三、验签逻辑
 

@@ -1,15 +1,4 @@
 #!/usr/bin/env node
-// 提交前的强制闸门:扫全仓库,发现任何凭据/隐私信息就直接失败。
-//
-// 跑法:  node tools/scan-secrets.js
-//        npm run check:secrets
-// 退出码:0 = 干净,1 = 发现敏感内容(不要提交!)
-//
-// 三类检查:
-//   A. 凭据特征(OpenAI/Anthropic/GitHub/AWS/Slack/私钥/JWT …)
-//   B. wrangler.toml 里该留空的变量一旦非空就报错
-//   C. 高危词表(真实 AppID 这类账号标识)
-// 示例值/占位符可以加进 ALLOWLIST 放行。
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -17,10 +6,8 @@ import path from 'node:path';
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 
 const SKIP_DIRS = new Set(['.git', 'node_modules', '.wrangler', '.idea', 'dist', 'coverage', '__pycache__']);
-// .dev.vars 本来就该放真实值,而且已在 .gitignore 里
 const SKIP_FILES = new Set(['.dev.vars', '.dev.vars.local', 'package-lock.json']);
 
-// ---------- A. 凭据特征 ----------
 const PATTERNS = [
   { name: 'OpenAI / 中转站 key', re: /\bsk-[A-Za-z0-9_-]{20,}/g },
   { name: 'Anthropic key', re: /\bsk-ant-[A-Za-z0-9_-]{20,}/g },
@@ -34,13 +21,11 @@ const PATTERNS = [
   { name: 'JWT', re: /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
 ];
 
-// ---------- B. wrangler.toml 必须留空的键 ----------
 const MUST_BE_EMPTY = [
-  'QQ_APP_ID', 'QQ_APP_SECRET', 'WEBHOOK_SECRET', 'ADMIN_TOKEN',
-  'LLM_API_KEY', 'LLM_BASE_URL', 'DASHBOARD_URL', 'PUBLIC_BASE_URL',
+  'QQ_APP_ID', 'QQ_APP_SECRET', 'LLM_BASE_URL', 'LLM_API_KEY',
+  'SEARCH_API_URL', 'SEARCH_API_KEY', 'PUBLIC_BASE_URL',
 ];
 
-// ---------- C. 高危词表 ----------
 const ALLOWLIST = [
   'example.com', 'your-domain', '<你的域名>', 'localhost', '127.0.0.1',
   'bot.test', 'cloudflare.com', 'bot.qq.com', 'api.sgroup.qq.com', 'q.qq.com',
@@ -49,7 +34,6 @@ const ALLOWLIST = [
 
 const SENSITIVE_WORDS = [
   {
-    // 只在「给 appId 赋值」的语境里才拦 10 位数字,避免误伤时间戳/位掩码
     name: '疑似真实 QQ 机器人 AppID',
     re: /(?:QQ_APP_ID|app_id|appId|AppID)["'\s:=]+["']?(1[0-9]{9})\b/gi,
     hint: '测试里请用 100000001 这类明显假值',
@@ -74,8 +58,6 @@ function isBinary(buf) {
   return false;
 }
 
-
-/** 文档里用反引号包起来的示例(以及以 - / * / # / > / | 开头的说明行)不算泄露 */
 function isDocExample(text, index, len) {
   const before = text[index - 1];
   const after = text[index + len];

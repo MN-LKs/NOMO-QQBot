@@ -1,10 +1,3 @@
-// QQ 机器人 Webhook 入口。
-//
-// 三条硬规则:
-//   1. 必须在 5 秒内回 200,否则腾讯会重推;所以重活全部丢给 Durable Object 的闹钟去做。
-//   2. 每条推送都要验 Ed25519 签名(否则任何人都能伪造群消息)。
-//   3. 同一条推送可能重发多次,必须按事件 ID 去重。
-
 import { signValidation, verifyWebhook } from './sign.js';
 
 const OK_BODY = JSON.stringify({ op: 12, d: {} });
@@ -16,7 +9,6 @@ function jsonRes(body, status = 200) {
   });
 }
 
-/** 把腾讯的事件转成内部任务 */
 export function normaliseEvent(payload) {
   const t = payload?.t;
   const d = payload?.d || {};
@@ -81,12 +73,6 @@ export function normaliseEvent(payload) {
   }
 }
 
-/**
- * @param {Request} request
- * @param {object} cfg
- * @param {object} env
- * @returns {Promise<Response>}
- */
 export async function handleWebhook(request, cfg, env) {
   if (request.method !== 'POST') {
     return jsonRes({ error: '只接受 POST' }, 405);
@@ -102,7 +88,6 @@ export async function handleWebhook(request, cfg, env) {
     return jsonRes({ error: 'body 不是合法 JSON' }, 400);
   }
 
-  // ---- 1. 回调地址验证(op=13)----
   if (payload.op === 13) {
     const eventTs = String(payload.d?.event_ts ?? '');
     const plainToken = String(payload.d?.plain_token ?? '');
@@ -116,8 +101,7 @@ export async function handleWebhook(request, cfg, env) {
     }
   }
 
-  // ---- 2. 签名校验 ----
-  if (cfg.verifySignature) {
+  {
     const sig = request.headers.get('X-Signature-Ed25519');
     const ts = request.headers.get('X-Signature-Timestamp');
     try {
@@ -127,12 +111,10 @@ export async function handleWebhook(request, cfg, env) {
         return jsonRes({ error: 'signature invalid' }, 401);
       }
     } catch (e) {
-      // 验签自身出问题(比如运行时差异)不能把机器人打死:放行但告警
       console.error('[验签异常,已放行]', e?.stack || e);
     }
   }
 
-  // ---- 3. 业务事件 ----
   if (payload.op !== 0) {
     return new Response(OK_BODY, { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
@@ -152,6 +134,9 @@ export async function handleWebhook(request, cfg, env) {
     const t = await r.text();
     if (!r.ok) throw new Error(`DO ${r.status}: ${t.slice(0, 200)}`);
     return t;
+  }).catch((e) => {
+    console.error('[入队失败]', e?.stack || e);
+    throw e;
   });
 
   try {

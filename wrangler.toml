@@ -1,109 +1,19 @@
-# ===========================================================================
-#  QQBot-NB-API  ·  Cloudflare Workers 配置
-#  改完直接 push 到 GitHub,Cloudflare 会自动重新部署(Workers Builds)。
-# ===========================================================================
-
-name               = "qqbot-nb-api"
+name               = "npapi"
 main               = "src/index.js"
 compatibility_date = "2026-09-01"
-
-# 免费套餐的用量上限(硬事实,别踩):
-#   请求       100,000 / 天
-#   CPU 时间   10 毫秒 / 请求(等待网络的时间不算 CPU)
-#   内存       128 MB
-#   子请求     50 / 请求
-#   并发外连   6 / 请求
-# Durable Object(本项目用它做持久化与后台任务):
-#   Workers Free 只能用 SQLite 后端,存储 5 GB,闹钟单次最长跑 15 分钟。
 
 [observability]
 enabled = true
 
-# ---------------------------------------------------------------------------
-# 变量。这个文件会被提交到公开仓库,所以所有值一律留空,真实值填在 Cloudflare 后台。
-# 提交前 tools/scan-secrets.js 会强制检查,非空即拒绝提交。
-# ---------------------------------------------------------------------------
 [vars]
-# ★★★ 这里一律留空。真实值不要写进这个文件 —— 仓库是公开的,写进来就等于泄露。
-#
-# 去哪里填:Cloudflare Dashboard → Workers & Pages → 你的 Worker
-#           → Settings → Variables and Secrets
-#   带 ★ 的必须填,不填机器人不工作。标了「敏感」的请用 Secret 类型加。
-#   本地调试写在 .dev.vars(已在 .gitignore 里),不要改这个文件。
-#
-# 提交前会自动跑 tools/scan-secrets.js 检查,这里一旦出现非空值就会被拦下。
-
-# ---- QQ 开放平台 ----------------------------------------------------------
-# ★ 机器人 AppID
 QQ_APP_ID        = ""
-# ★ 机器人 AppSecret(敏感)
 QQ_APP_SECRET    = ""
-# ★ 回调地址里的额外口令,自己随便生成一串(敏感)。
-#   填回调地址时要用它:https://<你的域名>/qq/webhook/<这个值>
-#   打开 /check 会直接告诉你完整地址,复制即可。
-WEBHOOK_SECRET   = ""
-# 是否强制校验腾讯的 Ed25519 签名(生产环境请保持 true)
-VERIFY_SIGNATURE = "true"
-# 管理接口口令(/admin/status?token=…),留空则关闭管理接口(敏感)
-ADMIN_TOKEN      = ""
+LLM_BASE_URL     = ""
+LLM_API_KEY      = ""
+SEARCH_API_URL   = ""
+SEARCH_API_KEY   = ""
+PUBLIC_BASE_URL  = ""
 
-# ---- 大模型 ---------------------------------------------------------------
-# ★ 上游网关地址,例如 https://api.example.com/v1
-LLM_BASE_URL            = ""
-# ★ 上游 API Key(敏感)
-LLM_API_KEY             = ""
-LLM_MODEL               = "deepseek-v4.1-flash"
-# 深度思考等级:max / high / medium / low / minimal
-LLM_REASONING_EFFORT    = "max"
-# 思考把输出预算吃光时的降级档位(必须保留,否则难题会没有正文)
-LLM_FALLBACK_EFFORT     = "low"
-# ★ 输出上限。留空 = 不限制(推荐):请求里根本不带 max_tokens 字段,
-#   由上游自己决定上限,长回答不会被硬截断。
-#   只有填了正整数才会带上这个字段,例如 "8192"。
-LLM_MAX_TOKENS          = ""
-# 单次模型调用的墙钟超时(毫秒)
-LLM_TIMEOUT_MS          = "180000"
-# 一轮对话最多几次「模型->工具->模型」往返
-AGENT_MAX_ROUNDS        = "6"
-
-# ---- 中转站信息查询 -------------------------------------------------------
-# ★ 用量查询接口,例如 https://manage.example.com/api/dashboard;
-#   留空则 query_dashboard 工具不可用
-DASHBOARD_URL = ""
-
-# ---- AI 部署(网页托管)---------------------------------------------------
-# ★ 对外访问域名,部署工具返回的链接就是它,例如 https://ai.example.com;
-#   留空则只能返回相对路径
-PUBLIC_BASE_URL        = ""
-DEPLOY_MAX_SITES       = "6"
-DEPLOY_TTL_SECONDS     = "600"
-# 站点 ID 字符集:
-#   ascii(默认,推荐)= 纯英文数字,已去掉容易看错的 0 o l 1 i
-#   mixed          = 中英文混合,链接里会出现 %E4%BA%91 这类百分号转义
-#   cjk            = 纯中文
-DEPLOY_ID_CHARSET      = "ascii"
-# 单个站点所有文件加起来的大小上限(字节)
-DEPLOY_MAX_BYTES       = "200000"
-
-# ---- 事件接收方式 -----------------------------------------------------------
-# webhook(默认)= 腾讯 POST 到本 Worker,DO 平时完全休眠,零常驻消耗。
-#                 需要先在 QQ 开放平台「事件订阅与回调地址」选 Webhook 并填回调地址。
-# websocket    = 由 DO 主动连 api.bot.qq.com 网关,不需要公网地址、也不需要配回调,
-#                 但 DO 必须一直醒着维持长连接:24 小时约 10,800 GB-s,
-#                 会吃掉免费额度(13,000 GB-s/天)的约 83%,而且不能休眠。
-#                 另注:同一机器人两种订阅方式在平台侧通常只能二选一,来回切要重新验证。
-# GATEWAY_MODE    = "webhook"
-# GATEWAY_INTENTS = "1107296257"   # GUILDS | GROUP_AND_C2C | PUBLIC_GUILD_MESSAGES
-
-# ---- 上下文 -----------------------------------------------------------------
-# 每个会话保留的最近消息条数
-CTX_KEEP_MESSAGES = "12"
-# 触发自动压缩的字数阈值
-CTX_COMPRESS_CHARS = "6000"
-
-# ---------------------------------------------------------------------------
-# Durable Object:一个实例扛全部(上下文/部署/任务队列/定时清理)
-# ---------------------------------------------------------------------------
 [[durable_objects.bindings]]
 name       = "BOT_CORE"
 class_name = "BotCore"
@@ -112,25 +22,9 @@ class_name = "BotCore"
 tag = "v1"
 new_sqlite_classes = ["BotCore"]
 
-# ---------------------------------------------------------------------------
-# 兜底定时任务:每 10 分钟清理过期部署、唤醒闹钟。不需要可以整段删掉。
-# ---------------------------------------------------------------------------
 [triggers]
 crons = ["*/10 * * * *"]
 
-# ---------------------------------------------------------------------------
-# 自定义域名(可选,但要 https://ai.example.com/<id> 这种链接就必须开)
-# example.com 必须已经托管在同一个 Cloudflare 账号下。
-#
-# 绑定域名有两种做法,二选一,别同时用(同一主机名重复声明会让 deploy 报冲突):
-#   A. Dashboard → Workers & Pages → 本 Worker → Settings → Domains & Routes
-#      → Add → Custom Domain。这种方式由 Cloudflare 自动管 DNS,不用改本文件。
-#   B. 取消下面 [[routes]] 的注释,用 wrangler 声明式管理(需要 example.com 已在该账号下)。
-#
-# 先到 Domains & Routes 看一眼:如果里面已经有 ai.example.com(说明是 A),
-# 就保持注释,不要再打开。
-# ---------------------------------------------------------------------------
 # [[routes]]
 # pattern   = "ai.example.com/*"
 # zone_name = "example.com"
-

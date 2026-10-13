@@ -1,16 +1,4 @@
-// Cloudflare Workers 入口。
-//
-// 路由表:
-//   POST /qq/webhook[/<口令>]   QQ 开放平台的事件回调(在开放平台后台填这个地址)
-//   GET  /health                存活探针
-//   GET  /check                 自检页(排查问题先看这里)
-//   GET  /admin/status?token=   运行状态(需要 ADMIN_TOKEN)
-//   GET  /<8字符ID>[/路径]      AI 部署出来的网页
-//
-// 注意:整个 Worker 的 CPU 预算在免费套餐只有 10 ms/请求,
-// 所以这里只做「验签 + 丢给 Durable Object + 返回」,重活全在 DO 的闹钟里干。
-
-import { loadConfig } from './config.js';
+import { loadConfig, ALL_VARS, REQUIRED_VARS } from './config.js';
 import { handleWebhook } from './qq/webhook.js';
 import { serveSite, splitSitePath } from './serve.js';
 import { BotCore } from './core/do.js';
@@ -25,81 +13,22 @@ export default {
     const path = url.pathname;
 
     try {
-      // ---------- 探针 ----------
       if (path === '/health' || path === '/healthz') {
-        return json({ ok: true, service: 'qqbot-nb-api', ts: Date.now() });
+        return json({ ok: true, service: 'npapi', ts: Date.now() });
       }
 
       if (path === '/favicon.ico') {
         return new Response(null, { status: 204 });
       }
 
-      // ---------- 自检 ----------
       if (path === '/check') {
-        return await selfCheck(request, env, cfg, url);
+        return await selfCheck(env, cfg, url);
       }
 
-      // ---------- 管理(需要 ADMIN_TOKEN)----------
-      if (path.startsWith('/admin/')) {
-        if (!cfg.adminToken) return json({ error: '未设置 ADMIN_TOKEN,该功能已关闭' }, 403);
-        if (url.searchParams.get('token') !== cfg.adminToken) return json({ error: 'token 不对' }, 403);
-
-        const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
-        if (path === '/admin/status') {
-          const r = await stub.fetch('https://do/status');
-          return json(await r.json());
-        }
-        if (path === '/admin/sites') {
-          const r = await stub.fetch('https://do/site/list');
-          const d = await r.json();
-          const now = Date.now();
-          return json({
-            count: d.sites.length,
-            max: cfg.maxSites,
-            sites: d.sites.map((s) => ({
-              id: s.id,
-              name: s.name,
-              url: s.url,
-              files: s.files.map((f) => f.path),
-              bytes: s.bytes,
-              expiresInSeconds: Math.max(0, Math.round((s.expiresAt - now) / 1000)),
-              updatedAt: new Date(s.updatedAt).toISOString(),
-            })),
-          });
-        }
-        if (path === '/admin/delete') {
-          const id = url.searchParams.get('id');
-          if (!id) return json({ error: '缺少 id' }, 400);
-          const r = await stub.fetch('https://do/site/delete', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id }),
-          });
-          return json(await r.json());
-        }
-        if (path === '/admin/clear-context') {
-          const convId = url.searchParams.get('conv');
-          if (!convId) return json({ error: '缺少 conv' }, 400);
-          const r = await stub.fetch('https://do/context/clear', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ convId }),
-          });
-          return json(await r.json());
-        }
-        return json({ error: '未知管理接口', hint: '/admin/status | /admin/sites | /admin/delete?id= | /admin/clear-context?conv=' }, 404);
-      }
-
-      // ---------- QQ 回调 ----------
       if (path === cfg.webhookPath || path.startsWith(`${cfg.webhookPath}/`)) {
-        const rest = path.slice(cfg.webhookPath.length).replace(/^\/+/, '');
-        if (cfg.webhookSecret && rest !== cfg.webhookSecret) {
-          return json({ error: 'not found' }, 404);
-        }
         return await handleWebhook(request, cfg, env);
       }
 
-      // ---------- AI 部署的网页 ----------
       const { id } = splitSitePath(path);
       if (!id || !isReservedPath(id)) {
         const res = await serveSite(env, cfg, request, url);
@@ -113,7 +42,6 @@ export default {
     }
   },
 
-  // 兜底定时任务:清过期部署、唤醒闹钟
   async scheduled(_event, env, ctx) {
     try {
       const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
@@ -138,47 +66,27 @@ function mask(s) {
   return `${v.slice(0, 4)}…${v.slice(-4)}(${v.length}位)`;
 }
 
-/**
- * 自检。浏览器直接打开 /check 就能看到哪里没配好。
- * 加 ?live=1 会真的去调一次腾讯接口和大模型(会花一点额度)。
- */
-async function selfCheck(request, env, cfg, url) {
+async function selfCheck(env, cfg, url) {
   const checks = [];
-  const softs = [];
+  const notes = [];
   const add = (name, ok, detail) => checks.push({ name, ok, detail });
-  const soft = (name, ok, detail) => softs.push({ name, ok, detail });
 
-  // 缺一项就标红并列出名字,别让人猜
-  const missing = [];
-  const req = (name, ok, detail) => {
-    if (!ok) missing.push(name);
-    add(name, ok, detail);
-  };
+  add('QQ_APP_ID', !!cfg.appId, cfg.appId ? '已设置' : '未设置 ← 必填');
+  add('QQ_APP_SECRET', !!cfg.appSecret, cfg.appSecret ? mask(cfg.appSecret) : '未设置 ← 必填');
+  add('LLM_BASE_URL', !!cfg.llmBaseUrl, cfg.llmBaseUrl || '未设置 ← 必填,例如 https://api.example.com/v1');
+  add('LLM_API_KEY', !!cfg.llmApiKey, cfg.llmApiKey ? mask(cfg.llmApiKey) : '未设置 ← 必填');
+  add('SEARCH_API_URL', true, cfg.searchApiUrl ? `已设置(${cfg.searchApiUrl})` : '未设置 → 联网搜索不可用');
+  add('SEARCH_API_KEY', true, cfg.searchApiKey ? '已设置' : '未设置 → 联网搜索不可用');
+  add('PUBLIC_BASE_URL', true, cfg.publicBaseUrl || '未设置 → 部署链接只返回相对路径');
 
-  req('QQ_APP_ID', !!cfg.appId, cfg.appId ? '已设置' : '未设置 ← 去 Cloudflare 后台填');
-  req('QQ_APP_SECRET', !!cfg.appSecret, cfg.appSecret ? mask(cfg.appSecret) : '未设置 ← 敏感项请用 Secret 类型');
-  req('LLM_BASE_URL', !!cfg.llmBaseUrl, cfg.llmBaseUrl || '未设置 ← 例如 https://api.example.com/v1');
-  req('LLM_API_KEY', !!cfg.llmApiKey, cfg.llmApiKey ? mask(cfg.llmApiKey) : '未设置 ← 敏感项请用 Secret 类型');
-  req('LLM_MODEL', !!cfg.llmModel, cfg.llmModel || '未设置');
-  add('深度思考等级', !!cfg.reasoningEffort, cfg.reasoningEffort);
-  add('输出上限', true, cfg.maxTokens > 0 ? `${cfg.maxTokens} tokens` : '不限制(请求不带 max_tokens,推荐)');
-  add('回调口令 WEBHOOK_SECRET', !!cfg.webhookSecret, cfg.webhookSecret ? '已设置' : '未设置(建议设置)');
-  add('验签开关', true, cfg.verifySignature ? '开启(推荐)' : '关闭');
-  add('部署域名 PUBLIC_BASE_URL', !!cfg.publicBaseUrl,
-    cfg.publicBaseUrl || '未配置 ← 部署链接只会是相对路径,打不开');
-  soft('用量查询 DASHBOARD_URL', !!cfg.dashboardUrl,
-    cfg.dashboardUrl ? '已配置' : '未配置 → query_dashboard 工具不可用');
+  add('模型', true, `${cfg.llmModel}(思考 ${cfg.reasoningEffort})`);
+  add('输出上限', true, '不限制(请求不带 max_tokens)');
   add('部署名额 / 存活', true, `${cfg.maxSites} 个 / ${Math.round(cfg.siteTtlSeconds / 60)} 分钟`);
-  add('ID 字符集', true, cfg.idCharset);
-  if (missing.length) {
-    soft('还缺这些变量', false, `${missing.join(' / ')} ← 到 Workers → Settings → Variables and Secrets 填`);
-  }
+  add('部署 ID', true, `${cfg.idLen} 位 ${cfg.idCharset}`);
 
-  const host = url.host;
-  const hook = `${url.protocol}//${host}${cfg.webhookPath}${cfg.webhookSecret ? `/${cfg.webhookSecret}` : ''}`;
-  add('回调地址(填到开放平台)', true, hook);
+  const hook = `${url.protocol}//${url.host}${cfg.webhookPath}`;
+  add('回调地址(填到 QQ 开放平台)', true, hook);
 
-  // DO 连通性
   let doOk = false;
   let doDetail = '';
   try {
@@ -192,29 +100,35 @@ async function selfCheck(request, env, cfg, url) {
   }
   add('Durable Object', doOk, doDetail);
 
-  if (url.searchParams.get('live') === '1') {
-    // 腾讯 access_token
-    try {
-      const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
-      const r = await stub.fetch('https://do/tick');
-      await r.text();
-      add('Durable Object 闹钟', true, '已触发一次');
-    } catch (e) {
-      add('Durable Object 闹钟', false, String(e?.message || e));
-    }
+  const missing = REQUIRED_VARS.filter((k) => !String(env?.[k] ?? '').trim());
+  if (missing.length) notes.push(`还缺必填变量:${missing.join(' / ')}`);
 
+  if (url.searchParams.get('live') === '1') {
     try {
       const res = await fetch(`${cfg.llmBaseUrl}/models`, {
-        headers: { 'Authorization': `Bearer ${cfg.llmApiKey}`, 'User-Agent': 'QQBot-NB-API/1.0' },
+        headers: { 'Authorization': `Bearer ${cfg.llmApiKey}`, 'User-Agent': 'NPAPI/1.0' },
       });
       add('大模型网关连通', res.ok, `HTTP ${res.status}`);
     } catch (e) {
       add('大模型网关连通', false, String(e?.message || e));
     }
+    try {
+      const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
+      await (await stub.fetch('https://do/tick')).text();
+      add('Durable Object 闹钟', true, '已触发一次');
+    } catch (e) {
+      add('Durable Object 闹钟', false, String(e?.message || e));
+    }
   }
 
   const ok = checks.every((c) => c.ok);
-  return new Response(JSON.stringify({ ok, checks, suggestions: softs, hint: '加 ?live=1 可做联网测试' }, null, 2), {
+  return new Response(JSON.stringify({
+    ok,
+    variables: ALL_VARS,
+    checks,
+    notes,
+    hint: '带 ?live=1 会真的调一次上游网关',
+  }, null, 2), {
     status: ok ? 200 : 500,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });

@@ -1,6 +1,3 @@
-// 系统提示词。写中文,因为机器人面向中文群。
-// 原则:把「模型能自己判断的」交给模型,把「模型一定会搞错的」写成硬规则。
-
 export function buildSystemPrompt(cfg, extra = {}) {
   const botName = extra.botName || 'NB-AI';
   const ttlMin = Math.round(cfg.siteTtlSeconds / 60);
@@ -18,8 +15,8 @@ export function buildSystemPrompt(cfg, extra = {}) {
 # 工具
 你可以调用工具。规则:
 - 算术一律用 calc,不要心算。
-- 涉及「今天 / 现在 / 最近 / 最新 / 实时」或你不确定的事实 → 用 web_search;知道具体网址 → 用 fetch_url 读原文。
-- 用户问 AI 额度、中转站用量 → 用 query_dashboard。
+- 涉及「今天 / 现在 / 最近 / 最新 / 实时」或你不确定的事实 → 用 web_search 联网搜索;知道具体网址 → 用 fetch_url 读原文。
+- 搜索不可用(工具会明确告诉你)时,老实说无法联网,不要编造。
 - 用户要「做个小游戏 / 写个网页 / 做个小工具 / 做个计算器」这类东西 → 必须用 deploy_site 真正部署出去,然后把链接给用户。绝对不要说「我贴给你代码你自己存成 html」。
 - 工具返回里出现「【重要】」字样时,那条要求必须照做。
 - 一次最多调 4 个工具,调完就把结果消化成自然语言回复。工具报错就换个思路或者老实告诉用户,不要反复重试同一个失败调用。
@@ -39,7 +36,6 @@ export function buildSystemPrompt(cfg, extra = {}) {
 - 不要 @全体成员,不要刷屏。`;
 }
 
-/** 上下文压缩用的提示词 */
 export function buildCompressPrompt() {
   return `请把下面这段 QQ 群聊天记录压缩成一份「对话摘要」,给未来的你当上下文用。
 
@@ -50,11 +46,10 @@ export function buildCompressPrompt() {
 4. 直接输出摘要正文,不要任何前言后语,不要 Markdown 标题。`;
 }
 
-/** 给「@了机器人但没说干什么」用的帮助文本 */
 export function buildHelpText(cfg) {
   const ttlMin = Math.round(cfg.siteTtlSeconds / 60);
   return [
-    '🤖 我是 NB-AI,能聊天、能联网、还能帮你把网页部署到公网。',
+    '🤖 我是 NB-AI,能聊天、能联网搜索、还能帮你把网页部署到公网。',
     '',
     '【怎么用】',
     '· @我 /AI 你的问题  —— 直接对话(也可以 @我 直接说话,效果一样)',
@@ -65,7 +60,6 @@ export function buildHelpText(cfg) {
     '· 联网搜索最新消息',
     '· 写代码并一键部署成网页,给你一个能打开的链接',
     `· 部署项目最多 ${cfg.maxSites} 个,每个活 ${ttlMin} 分钟,改一次就重新计时`,
-    '· 查 AI 额度用量',
     '',
     '【上下文管理】',
     '· /压缩  —— 把聊天记录压成摘要,省 token 但不忘事',

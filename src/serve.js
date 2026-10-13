@@ -1,8 +1,3 @@
-// 托管 AI 部署出来的网页。
-// URL 形态:https://<域名>/<8字符ID>             -> index.html
-//           https://<域名>/<8字符ID>/app.js      -> 指定文件
-//           https://<域名>/<8字符ID>/__data/键   -> 内置简易后端(GET 读 / POST 写)
-
 const TYPES = {
   html: 'text/html; charset=utf-8',
   htm: 'text/html; charset=utf-8',
@@ -39,7 +34,6 @@ function securityHeaders(path) {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'X-Robots-Tag': 'noindex, nofollow',
-    // AI 生成的页面需要内联脚本和外链 CDN,所以给一个宽松但明确的 CSP
     'Content-Security-Policy': "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; "
       + "img-src 'self' data: blob: https:; connect-src 'self' https:;",
     'Cache-Control': isHtml ? 'no-store' : 'public, max-age=30',
@@ -78,7 +72,6 @@ function textPage(title, msg, status) {
   });
 }
 
-/** 把 pathname 拆成 { id, file } */
 export function splitSitePath(pathname) {
   let raw = String(pathname || '/').replace(/^\/+/, '');
   const slash = raw.indexOf('/');
@@ -86,10 +79,12 @@ export function splitSitePath(pathname) {
   let file = slash < 0 ? '' : raw.slice(slash + 1);
   try {
     id = decodeURIComponent(id);
-  } catch { /* 保持原样 */ }
+  } catch {
+  }
   try {
     file = decodeURIComponent(file);
-  } catch { /* 保持原样 */ }
+  } catch {
+  }
   return { id, file: file.replace(/^\/+/, '') };
 }
 
@@ -99,7 +94,6 @@ export async function serveSite(env, cfg, request, url) {
 
   const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
 
-  // ---- 内置后端:./__data/<key> ----
   if (file === '__data' || file.startsWith('__data/')) {
     const key = file.slice('__data'.length).replace(/^\/+/, '');
     if (!key) return json({ error: '缺少键名' }, 400);
@@ -132,7 +126,6 @@ export async function serveSite(env, cfg, request, url) {
     return json({ error: '只支持 GET/POST' }, 405);
   }
 
-  // ---- 静态文件 ----
   const r = await stub.fetch(`https://do/site/get?id=${encodeURIComponent(id)}`);
   const { site } = await r.json();
   if (!site) return textPage(id, '', 404);
@@ -142,7 +135,6 @@ export async function serveSite(env, cfg, request, url) {
 
   let f = site.files.find((x) => x.path === target);
   if (!f) {
-    // 单页应用兜底:找不到文件就回 index.html
     f = site.files.find((x) => x.path.toLowerCase() === 'index.html');
     if (!f) return textPage(id, '', 404);
     target = 'index.html';

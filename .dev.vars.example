@@ -1,11 +1,13 @@
-# 本地开发用的变量覆盖(wrangler dev 会自动读取 .dev.vars)
-# 复制成 .dev.vars 再改。这个文件已经在 .gitignore 里,不会被提交。
+# 本地开发用。复制成 .dev.vars(wrangler dev 会自动读取),这个文件本身不会被提交。
+#
+# 线上部署时这些值填在 Cloudflare 后台:
+#   Workers & Pages → 你的 Worker → Settings → Variables and Secrets
+# 密钥类的建议用 Secret 类型。
 
-WEBHOOK_SECRET=dev-secret
-ADMIN_TOKEN=dev-admin
-VERIFY_SIGNATURE=true
-
-# 想本地调试而不花真实额度,可以把上游指向自己的假服务
-# LLM_BASE_URL=http://127.0.0.1:8790/v1
-# QQ_API_BASE=http://127.0.0.1:8790
-# QQ_TOKEN_URL=http://127.0.0.1:8790/app/getAppAccessToken
+QQ_APP_ID=
+QQ_APP_SECRET=
+LLM_BASE_URL=
+LLM_API_KEY=
+SEARCH_API_URL=
+SEARCH_API_KEY=
+PUBLIC_BASE_URL=http://127.0.0.1:8787

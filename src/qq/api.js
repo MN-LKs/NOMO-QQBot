@@ -1,9 +1,5 @@
-// QQ 机器人 OpenAPI 客户端(只用到发消息 / 拿 token 这两类)。
-// 文档:https://bot.q.qq.com/wiki/develop/api-v2/
-
 const UA = 'QQBot-NB-API/1.0 (+cloudflare-workers)';
 
-/** 拿 app access_token。7200 秒有效期,过期前 60 秒内取会拿到新的。 */
 export async function fetchAccessToken(cfg) {
   const res = await fetch(cfg.tokenUrl, {
     method: 'POST',
@@ -23,13 +19,11 @@ export async function fetchAccessToken(cfg) {
   const expiresIn = parseInt(data.expires_in, 10);
   return {
     token: data.access_token,
-    // 提前 5 分钟过期,避免边界情况
     expiresAt: Date.now() + (Number.isFinite(expiresIn) ? expiresIn : 7200) * 1000 - 300000,
   };
 }
 
 function headers(cfg, token) {
-  // 官方文档只要求 Authorization: QQBot <token>,不要画蛇添足加别的头
   return {
     'Authorization': `QQBot ${token}`,
     'Content-Type': 'application/json',
@@ -53,14 +47,6 @@ async function post(cfg, token, path, body) {
   return { ok: res.ok, status: res.status, data };
 }
 
-/**
- * 发群聊消息。
- * @param {object} o
- * @param {string} o.groupOpenid
- * @param {string} o.content
- * @param {string} [o.msgId]  被动回复必须带(msg_id 来自消息事件)
- * @param {number} [o.msgSeq] 被动回复的序号,同一条 msg_id 每次必须不同,否则 40054005 去重
- */
 export function sendGroupMessage(cfg, token, o) {
   const body = { msg_type: 0, content: String(o.content) };
   if (o.msgId) body.msg_id = o.msgId;
@@ -68,7 +54,6 @@ export function sendGroupMessage(cfg, token, o) {
   return post(cfg, token, `/v2/groups/${encodeURIComponent(o.groupOpenid)}/messages`, body);
 }
 
-/** 发单聊(C2C)消息 */
 export function sendC2CMessage(cfg, token, o) {
   const body = { msg_type: 0, content: String(o.content) };
   if (o.msgId) body.msg_id = o.msgId;
@@ -76,24 +61,9 @@ export function sendC2CMessage(cfg, token, o) {
   return post(cfg, token, `/v2/users/${encodeURIComponent(o.openid)}/messages`, body);
 }
 
-/** 主动消息(不需要 msg_id,受频控限制) */
-export function sendGroupActive(cfg, token, groupOpenid, content) {
-  return post(cfg, token, `/v2/groups/${encodeURIComponent(groupOpenid)}/messages`, {
-    msg_type: 0,
-    content: String(content),
-  });
-}
-
-/** QQ 返回「不允许发送 URL」 */
 export const ERR_URL_FORBIDDEN = 40054010;
-/** 消息长度超限 */
 export const ERR_TOO_LONG = 40054007;
-/** 消息被去重(msg_seq 没变) */
-export const ERR_DEDUP = 40054005;
-/** 被动回复时间/次数超限 */
-export const ERR_PASSIVE_LIMIT = 40034128;
 
-/** 给用户看的错误解释 */
 export function explainError(data) {
   const code = data?.code;
   const map = {
@@ -121,11 +91,7 @@ export function explainError(data) {
   return `${code} ${map[code] || data?.message || ''}`.trim();
 }
 
-/**
- * 把一条长回复拆开发出去。返回实际发出的条数与失败原因。
- * 针对 40054010(不许发 URL)会自动降级:去掉协议头再试一次。
- */
-export async function deliver(cfg, token, target, text, opts = {}) {
+export async function deliver(cfg, token, target, opts = {}) {
   const { chunks, chunkSize = 800, maxChunks = 5, msgId } = opts;
   const list = chunks;
   const sent = [];
@@ -136,7 +102,6 @@ export async function deliver(cfg, token, target, text, opts = {}) {
     let content = raw;
     let r = await send(target, content, seq);
     if (!r.ok && r.data?.code === ERR_URL_FORBIDDEN) {
-      // 腾讯不让发 URL:把 https:// 去掉,多数情况能过
       const stripped = content.replace(/https?:\/\//g, '');
       if (stripped !== content) {
         const r2 = await send(target, stripped, seq);
@@ -150,7 +115,6 @@ export async function deliver(cfg, token, target, text, opts = {}) {
       }
     }
     if (!r.ok && r.data?.code === ERR_TOO_LONG) {
-      // 再切一半重试一次
       const half = chunkSize >> 1;
       let ok = true;
       for (const piece of chunkRaw(content, half)) {

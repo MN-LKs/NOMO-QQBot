@@ -1,22 +1,11 @@
-// Agent 主循环:模型 -> 工具 -> 模型 ... 直到拿到最终回复。
-
 import { chatWithFallback } from './llm.js';
 import { buildTools } from './tools.js';
 import { executeTool } from './exec.js';
 import { buildSystemPrompt } from './prompt.js';
 import { truncate } from '../util/text.js';
 
-const TOTAL_BUDGET_MS = 9 * 60 * 1000; // 单条消息总预算(DO 闹钟最长 15 分钟)
+const TOTAL_BUDGET_MS = 4 * 60 * 1000;
 
-/**
- * @param {object} o
- * @param {object} o.cfg
- * @param {object} o.core       Durable Object 实例(提供站点/上下文方法)
- * @param {string} o.convId     会话 ID
- * @param {string} o.userText   用户这次说的话
- * @param {object} [o.meta]     附加信息(昵称等)
- * @param {function} [o.log]    日志函数
- */
 export async function runAgent({ cfg, core, convId, userText, meta = {}, log = console.log }) {
   const started = Date.now();
   const tools = buildTools(cfg);
@@ -49,14 +38,14 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
     }
     rounds++;
 
+    const left = TOTAL_BUDGET_MS - (Date.now() - started);
     const resp = await chatWithFallback(cfg, messages, tools, {
-      timeoutMs: Math.min(cfg.llmTimeoutMs, TOTAL_BUDGET_MS - (Date.now() - started) + 5000),
+      timeoutMs: Math.max(20000, Math.min(cfg.llmTimeoutMs, left + 5000)),
     });
 
     if (resp.downgradedFrom) downgraded = true;
     if (resp.usage?.total_tokens) usageTotal += resp.usage.total_tokens;
 
-    // 思考过程只进日志,绝不进 QQ 群
     log(`[思考] round=${round + 1} effort=${resp.downgradedFrom ? cfg.fallbackEffort : cfg.reasoningEffort} `
       + `finish=${resp.finishReason} 思考片数=${resp.reasoningLen} 正文=${resp.content.length}字 `
       + `耗时=${resp.elapsedMs}ms${resp.aborted ? ' [被超时中断]' : ''}`);
@@ -97,12 +86,11 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
     }
 
     if (round === cfg.agentMaxRounds - 1) {
-      // 最后一轮还在调工具,强制要一次正文
       messages.push({
         role: 'user',
         content: '现在请直接用简体中文给出最终回复,不要再调用任何工具。',
       });
-      const last = await chatWithFallback(cfg, messages, null, { timeoutMs: 90000 });
+      const last = await chatWithFallback(cfg, messages, null, { timeoutMs: 60000 });
       if (last.content.trim()) final = last.content;
     }
   }
@@ -121,7 +109,6 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
     usageTotal,
     downgraded,
     elapsedMs: Date.now() - started,
-    // 存进上下文的版本:保留工具产生的关键信息,但不要整段工具原文
     historyUser: userText,
     historyAssistant: final,
   };
