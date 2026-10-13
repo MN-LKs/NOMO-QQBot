@@ -11,6 +11,7 @@ import { parseCompletion, isBlank, RETRY_NUDGE } from '../src/agent/llm.js';
 import { detectProvider, extractResults, buildRequest, SUPPORTED_PROVIDERS } from '../src/agent/search.js';
 import { normaliseFiles } from '../src/agent/exec.js';
 import { normaliseEvent } from '../src/qq/webhook.js';
+import { executeTool } from '../src/agent/exec.js';
 import { parseCommand } from '../src/core/do.js';
 import { splitSitePath } from '../src/serve.js';
 import { buildTools } from '../src/agent/tools.js';
@@ -446,6 +447,47 @@ test('normaliseEvent:未知事件忽略', () => {
   assert.equal(normaliseEvent({}).kind, 'ignore');
 });
 
+test('normaliseEvent:全部接收模式下各类事件都有归宿', () => {
+  const mk = (t, d) => normaliseEvent({ id: 'e1', t, d });
+  assert.equal(mk('GROUP_MESSAGE_CREATE', { group_openid: 'g', author: { member_openid: 'u' }, content: 'x' }).kind, 'message');
+  assert.equal(mk('GROUP_AT_MESSAGE_CREATE', { group_openid: 'g', author: { member_openid: 'u' }, content: 'x' }).scene, 'group');
+  assert.equal(mk('C2C_MESSAGE_CREATE', { author: { user_openid: 'u' }, content: 'x' }).scene, 'c2c');
+  assert.equal(mk('GROUP_ADD_ROBOT', { group_openid: 'g' }).text, '/帮助');
+  assert.equal(mk('FRIEND_ADD', { openid: 'u' }).text, '/帮助');
+  for (const t of ['GROUP_DEL_ROBOT', 'FRIEND_DEL', 'GROUP_MSG_RECEIVE', 'C2C_MSG_REJECT']) {
+    assert.equal(mk(t, {}).kind, 'note', t);
+  }
+  for (const t of ['AT_MESSAGE_CREATE', 'MESSAGE_REACTION_ADD', '未来才有的新事件']) {
+    assert.equal(mk(t, {}).kind, 'ignore', t);
+  }
+  assert.equal(mk('GROUP_AT_MESSAGE_CREATE', {}).kind, 'message');
+});
+test('executeTool:random 范围与抽签', async () => {
+  const r = await executeTool('random', { min: 5, max: 5 }, {});
+  assert.equal(r, '随机结果:5');
+  const pick = await executeTool('random', { choices: ['A', 'B'], count: 3 }, {});
+  assert.ok(pick.includes('随机抽 3 次'), pick);
+  assert.ok((await executeTool('random', {}, {})).includes('随机结果:'));
+});
+test('executeTool:encode 编解码与 JSON 格式化', async () => {
+  assert.equal(await executeTool('encode', { action: 'base64_encode', text: 'hello' }, {}), 'aGVsbG8=');
+  assert.equal(await executeTool('encode', { action: 'base64_decode', text: 'aGVsbG8=' }, {}), 'hello');
+  assert.equal(await executeTool('encode', { action: 'hex_encode', text: 'A' }, {}), '41');
+  assert.equal(await executeTool('encode', { action: 'hex_decode', text: '41' }, {}), 'A');
+  assert.equal(await executeTool('encode', { action: 'url_encode', text: '你 好' }, {}), '%E4%BD%A0%20%E5%A5%BD');
+  assert.equal(await executeTool('encode', { action: 'json_minify', text: '{ "a" : 1 }' }, {}), '{"a":1}');
+  assert.ok((await executeTool('encode', { action: 'base64_encode', text: '' }, {})).includes('执行失败'));
+});
+test('executeTool:未知工具给出可用清单', async () => {
+  const r = await executeTool('nope', {}, {});
+  assert.ok(r.includes('没有名为 nope 的工具'), r);
+  assert.ok(r.includes('deploy_site'), r);
+});
+test('executeTool:工具报错不会抛出去', async () => {
+  const r = await executeTool('calc', { expression: '1+' }, {});
+  assert.ok(r.includes('执行失败'), r);
+});
+
 // ===========================================================================
 // 10. 命令解析
 // ===========================================================================
@@ -487,8 +529,10 @@ test('splitSitePath:中文 ID 能正确解码', () => {
 test('工具定义合法且包含关键工具', () => {
   const tools = buildTools(CFG);
   const names = tools.map((t) => t.function.name);
-  for (const need of ['deploy_site', 'update_site', 'list_sites', 'read_site', 'delete_site', 'web_search', 'fetch_url', 'calc', 'now']) {
-    assert.ok(names.includes(need), `缺少工具 ${need}`);
+  const need = ['deploy_site', 'update_site', 'list_sites', 'read_site', 'delete_site', 'web_search', 'fetch_url',
+    'query_dashboard', 'remember', 'recall', 'forget', 'random', 'encode', 'calc', 'now'];
+  for (const need2 of need) {
+    assert.ok(names.includes(need2), `缺少工具 ${need2}`);
   }
   for (const t of tools) {
     assert.equal(t.type, 'function');

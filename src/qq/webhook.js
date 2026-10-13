@@ -2,6 +2,25 @@ import { signValidation, verifyWebhook } from './sign.js';
 
 const OK_BODY = JSON.stringify({ op: 12, d: {} });
 
+const MESSAGE_EVENTS = new Set([
+  'GROUP_AT_MESSAGE_CREATE',
+  'GROUP_MESSAGE_CREATE',
+  'C2C_MESSAGE_CREATE',
+]);
+
+const JOIN_EVENTS = new Set(['GROUP_ADD_ROBOT', 'FRIEND_ADD']);
+
+const NOTED_EVENTS = new Set([
+  'GROUP_DEL_ROBOT',
+  'FRIEND_DEL',
+  'GROUP_MSG_REJECT',
+  'GROUP_MSG_RECEIVE',
+  'C2C_MSG_REJECT',
+  'C2C_MSG_RECEIVE',
+]);
+
+const loggedTypes = new Set();
+
 function jsonRes(body, status = 200) {
   return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
     status,
@@ -9,68 +28,66 @@ function jsonRes(body, status = 200) {
   });
 }
 
+function textOf(d) {
+  return String(d?.content || '').trim();
+}
+
 export function normaliseEvent(payload) {
   const t = payload?.t;
   const d = payload?.d || {};
   const base = { eventId: payload?.id, type: t, ts: Date.now() };
 
-  switch (t) {
-    case 'GROUP_AT_MESSAGE_CREATE':
-    case 'GROUP_MESSAGE_CREATE': {
-      return {
-        ...base,
-        kind: 'message',
-        scene: 'group',
-        convId: `g:${d.group_openid}`,
-        targetId: d.group_openid,
-        messageId: d.id,
-        userId: d.author?.member_openid || d.author?.id,
-        nickname: d.author?.nickname || d.author?.username || '',
-        text: String(d.content || '').trim(),
-      };
-    }
-    case 'C2C_MESSAGE_CREATE': {
-      return {
-        ...base,
-        kind: 'message',
-        scene: 'c2c',
-        convId: `u:${d.author?.user_openid}`,
-        targetId: d.author?.user_openid,
-        messageId: d.id,
-        userId: d.author?.user_openid,
-        nickname: '',
-        text: String(d.content || '').trim(),
-      };
-    }
-    case 'GROUP_ADD_ROBOT': {
-      return {
-        ...base,
-        kind: 'message',
-        scene: 'group',
-        convId: `g:${d.group_openid}`,
-        targetId: d.group_openid,
-        messageId: d.event_id || d.id,
-        userId: d.op_member_openid,
-        nickname: '',
-        text: '/帮助',
-      };
-    }
-    case 'FRIEND_ADD': {
-      return {
-        ...base,
-        kind: 'message',
-        scene: 'c2c',
-        convId: `u:${d.openid}`,
-        targetId: d.openid,
-        messageId: d.event_id || d.id,
-        userId: d.openid,
-        nickname: '',
-        text: '/帮助',
-      };
-    }
-    default:
-      return { ...base, kind: 'ignore' };
+  if (MESSAGE_EVENTS.has(t)) {
+    const isC2C = t === 'C2C_MESSAGE_CREATE';
+    const groupId = d.group_openid;
+    const userId = d.author?.user_openid || d.author?.member_openid || d.author?.id;
+    const openId = d.author?.user_openid || d.author?.member_openid;
+    return {
+      ...base,
+      kind: 'message',
+      scene: isC2C ? 'c2c' : 'group',
+      convId: isC2C ? `u:${openId}` : `g:${groupId}`,
+      targetId: isC2C ? openId : groupId,
+      messageId: d.id,
+      userId: isC2C ? openId : userId,
+      nickname: d.author?.nickname || d.author?.username || '',
+      text: textOf(d),
+    };
   }
+
+  if (t === 'GROUP_ADD_ROBOT') {
+    return {
+      ...base,
+      kind: 'message',
+      scene: 'group',
+      convId: `g:${d.group_openid}`,
+      targetId: d.group_openid,
+      messageId: d.event_id || d.id,
+      userId: d.op_member_openid,
+      nickname: '',
+      text: '/帮助',
+    };
+  }
+
+  if (t === 'FRIEND_ADD') {
+    return {
+      ...base,
+      kind: 'message',
+      scene: 'c2c',
+      convId: `u:${d.openid}`,
+      targetId: d.openid,
+      messageId: d.event_id || d.id,
+      userId: d.openid,
+      nickname: '',
+      text: '/帮助',
+    };
+  }
+
+  if (NOTED_EVENTS.has(t)) {
+    return { ...base, kind: 'note' };
+  }
+
+  return { ...base, kind: 'ignore' };
 }
 
 export async function handleWebhook(request, cfg, env) {
@@ -120,8 +137,14 @@ export async function handleWebhook(request, cfg, env) {
   }
 
   const task = normaliseEvent(payload);
-  if (task.kind === 'ignore') {
-    console.log(`[忽略事件] ${task.type}`);
+
+  if (task.kind !== 'message') {
+    if (task.kind === 'note') {
+      console.log(`[事件] ${task.type} 已收到(无需回复)`);
+    } else if (task.type && !loggedTypes.has(task.type)) {
+      loggedTypes.add(task.type);
+      console.log(`[事件] 未处理的类型:${task.type}(已忽略,如需支持请告知)`);
+    }
     return new Response(OK_BODY, { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 

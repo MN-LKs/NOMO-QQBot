@@ -2,7 +2,7 @@ import http from 'node:http';
 
 export function startMock({ llmPort = 8790 } = {}) {
   const calls = { chat: 0, qqSend: [], qqToken: 0, llmBodies: [] };
-  const flags = { breakChat: 0, emptyAnswer: 0, longAnswer: null, rejectUrl: 0 };
+  const flags = { breakChat: 0, emptyAnswer: 0, longAnswer: null, rejectUrl: 0, rejectActive: 0, plainAnswer: 0, rejectPassive: 0 };
 
   const server = http.createServer(async (req, res) => {
     const chunks = [];
@@ -19,6 +19,15 @@ export function startMock({ llmPort = 8790 } = {}) {
       let body = {};
       try { body = JSON.parse(raw); } catch { /* ignore */ }
       calls.qqSend.push({ path: url.pathname, body });
+      const isActive = !body.msg_id;
+      if (!isActive && flags.rejectPassive > 0) {
+        flags.rejectPassive--;
+        return json(res, { code: 40034128, message: '被动回复时间或次数超限' }, 400);
+      }
+      if (isActive && flags.rejectActive > 0) {
+        flags.rejectActive--;
+        return json(res, { code: 40034105, message: '主动消息无权限' }, 400);
+      }
       if (flags.rejectUrl > 0 && /https?:\/\//.test(String(body.content))) {
         flags.rejectUrl--;
         return json(res, { code: 40054010, message: '不允许发送URL' }, 400);
@@ -28,6 +37,18 @@ export function startMock({ llmPort = 8790 } = {}) {
 
     if (url.pathname === '/v1/models') {
       return json(res, { data: [{ id: 'deepseek-v4.1-flash', object: 'model' }] });
+    }
+
+    if (url.pathname === '/dashboard') {
+      return json(res, {
+        data: {
+          realtime: {
+            all_quota: 1000000, all_requests: 42, all_tokens: 123456,
+            last300_req: 3, last300_tokens: 900, last60_req: 1, last60_tokens: 300, last300_active_users: 2,
+          },
+          recent: [{ id: 1, model_name: 'deepseek-v4.1-flash', tokens: 500, username: 'tester' }],
+        },
+      });
     }
 
     if (url.pathname === '/search') {
@@ -83,6 +104,15 @@ export function startMock({ llmPort = 8790 } = {}) {
         }));
       }
 
+      if (flags.plainAnswer > 0) {
+        flags.plainAnswer--;
+        return json(res, completion({
+          reasoning: '直接回答,不需要工具。',
+          content: '好的,收到啦。',
+          usage: { total: 20, reasoning: 5 },
+        }));
+      }
+
       const n = calls.chat;
       const args = JSON.stringify({
         name: `测试项目${n}`,
@@ -109,10 +139,13 @@ export function startMock({ llmPort = 8790 } = {}) {
       server,
       calls,
       flags,
-      breakOnce: (n = 1) => { flags.breakChat += n; },
+      breakOnce: (n = 1) => { flags.breakChat += Number(n) || 1; },
       emptyOnce: () => { flags.emptyAnswer++; },
       longOnce: (text) => { flags.longAnswer = text; },
       rejectUrlOnce: () => { flags.rejectUrl++; },
+      rejectActiveOnce: (n = 1) => { flags.rejectActive += n; },
+      plainNext: (n = 1) => { flags.plainAnswer += n; },
+      rejectPassiveOnce: (n = 1) => { flags.rejectPassive += n; },
       close: () => new Promise((r) => server.close(r)),
     }));
   });

@@ -5,7 +5,7 @@ import { webSearch } from './search.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
-const TOOL_LIST = 'calc, now, web_search, fetch_url, deploy_site, update_site, list_sites, read_site, delete_site';
+const TOOL_LIST = 'calc, now, web_search, fetch_url, query_dashboard, deploy_site, update_site, list_sites, read_site, delete_site, remember, recall, forget, random, encode';
 
 function fmtTime(d, offsetHours) {
   const t = new Date(d.getTime() + offsetHours * 3600_000);
@@ -64,6 +64,69 @@ async function fetchText(url, { timeoutMs = 20000, maxBytes = 800000 } = {}) {
   }
 }
 
+
+function b64encode(text) {
+  const bytes = new TextEncoder().encode(text);
+  let bin = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function b64decode(text) {
+  const bin = atob(String(text).replace(/\s+/g, ''));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+}
+
+function hexEncode(text) {
+  return [...new TextEncoder().encode(text)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function hexDecode(text) {
+  const clean = String(text).replace(/\s+/g, '');
+  if (clean.length % 2) throw new Error('hex 长度必须是偶数');
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  if ([...bytes].some((b) => Number.isNaN(b))) throw new Error('hex 含非法字符');
+  return new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+}
+
+function doEncode(action, text) {
+  const t = String(text ?? '');
+  if (!t) throw new Error('内容不能为空');
+  switch (action) {
+    case 'base64_encode': return b64encode(t);
+    case 'base64_decode': return b64decode(t);
+    case 'url_encode': return encodeURIComponent(t);
+    case 'url_decode': return decodeURIComponent(t);
+    case 'hex_encode': return hexEncode(t);
+    case 'hex_decode': return hexDecode(t);
+    case 'json_pretty': return JSON.stringify(JSON.parse(t), null, 2);
+    case 'json_minify': return JSON.stringify(JSON.parse(t));
+    default: throw new Error(`不认识的动作 ${action}`);
+  }
+}
+
+function doRandom(a) {
+  const n = Math.max(1, Math.min(20, Number(a.count) || 1));
+  const choices = Array.isArray(a.choices) ? a.choices.map((x) => String(x)).filter(Boolean) : [];
+  const picks = [];
+  if (choices.length) {
+    for (let i = 0; i < n; i++) picks.push(choices[Math.floor(Math.random() * choices.length)]);
+    return n === 1 ? `抽中了:${picks[0]}` : `随机抽 ${n} 次:${picks.join('、')}`;
+  }
+  let min = Number.isFinite(Number(a.min)) ? Math.ceil(Number(a.min)) : 1;
+  let max = Number.isFinite(Number(a.max)) ? Math.floor(Number(a.max)) : 100;
+  if (max < min) [min, max] = [max, min];
+  if (max - min > 1e9) throw new Error('范围太大了');
+  for (let i = 0; i < n; i++) picks.push(min + Math.floor(Math.random() * (max - min + 1)));
+  return n === 1 ? `随机结果:${picks[0]}` : `随机 ${n} 个:${picks.join('、')}`;
+}
+
 export async function executeTool(name, args, ctx) {
   const a = args && typeof args === 'object' ? args : {};
   try {
@@ -92,6 +155,56 @@ export async function executeTool(name, args, ctx) {
           : htmlToText(raw, maxChars);
         return `来自 ${u.toString()} 的正文:\n${text}`;
       }
+
+
+      case 'query_dashboard': {
+        const res = await fetch(ctx.cfg.dashboardUrl, {
+          headers: { 'Authorization': `Bearer ${ctx.cfg.llmApiKey}`, 'User-Agent': UA },
+        });
+        if (!res.ok) return `查询中转站失败: HTTP ${res.status}`;
+        const d = await res.json();
+        const rt = d?.data?.realtime || {};
+        const recent = Array.isArray(d?.data?.recent) ? d.data.recent.slice(0, 5) : [];
+        const lines = [
+          '中转站实时数据:',
+          `  总额度: ${rt.all_quota ?? '?'}`,
+          `  累计请求: ${rt.all_requests ?? '?'}`,
+          `  累计 token: ${rt.all_tokens ?? '?'}`,
+          `  近 5 分钟: ${rt.last300_req ?? '?'} 次请求 / ${rt.last300_tokens ?? '?'} tokens`,
+          `  近 1 分钟: ${rt.last60_req ?? '?'} 次请求 / ${rt.last60_tokens ?? '?'} tokens`,
+          `  近 5 分钟活跃用户: ${rt.last300_active_users ?? '?'}`,
+        ];
+        if (recent.length) {
+          lines.push('最近调用:');
+          for (const r of recent) {
+            lines.push(`  #${r.id} ${r.model_name} ${r.tokens} tokens 用户 ${r.username}`);
+          }
+        }
+        return lines.join('\n');
+      }
+
+      case 'remember': {
+        const r = ctx.core.memSet(ctx.convId, a.key, a.value);
+        if (r.error) return r.error;
+        return `记住了:${r.key} → ${r.value}\n(以后这个会话都会带上它,回复用户时不用特意复述)`;
+      }
+
+      case 'recall': {
+        const list = ctx.core.memList(ctx.convId);
+        if (!list.length) return '这个会话还没有记住任何东西。';
+        return ['已记住的内容:', ...list.map((m, i) => `${i + 1}. ${m.key} → ${m.value}`)].join('\n');
+      }
+
+      case 'forget': {
+        const ok = ctx.core.memDel(ctx.convId, a.key);
+        return ok ? `已经忘掉「${a.key}」。` : `没有找到「${a.key}」这条记忆,先用 recall 看一下有哪些。`;
+      }
+
+      case 'random':
+        return doRandom(a);
+
+      case 'encode':
+        return doEncode(String(a.action || ''), a.text);
 
       case 'deploy_site': {
         const files = normaliseFiles(a.files, ctx.cfg);

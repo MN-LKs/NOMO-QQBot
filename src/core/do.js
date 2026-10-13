@@ -186,6 +186,13 @@ export class BotCore {
         : `压缩失败:${r.error}`);
       return;
     }
+    if (cmd.name === 'memory') {
+      const list = this.memList(convId);
+      await this.reply(p, list.length
+        ? ['🧠 我记住的这些事:', ...list.map((m, i) => `${i + 1}. ${m.key} → ${m.value}`)].join('\n')
+        : '🧠 这个会话还没有记住任何事。对我说「记住 xxx」我就会记下来。');
+      return;
+    }
     if (cmd.name === 'status') {
       const s = this.status();
       const c = this.getContext(convId);
@@ -193,7 +200,7 @@ export class BotCore {
         '📊 当前状态',
         `· 在线部署:${s.sites}/${cfg.maxSites}`,
         `· 排队任务:${s.pending} 待处理 / ${s.running} 执行中`,
-        `· 本会话:摘要 ${c.summary ? `${c.summary.length} 字` : '无'},历史 ${c.messages.length} 条`,
+        `· 本会话:摘要 ${c.summary ? `${c.summary.length} 字` : '无'},历史 ${c.messages.length} 条,记忆 ${this.memList(convId).length} 条`,
         `· 模型:${cfg.llmModel}(思考 ${cfg.reasoningEffort})`,
         `· 部署存活:${Math.round(cfg.siteTtlSeconds / 60)} 分钟`,
       ].join('\n'));
@@ -206,7 +213,7 @@ export class BotCore {
       return;
     }
 
-    await this.reply(p, '🤔 收到,正在思考…', { silent: false });
+    await this.reply(p, '🤖 Agent 正在运行,请稍等…');
 
     const result = await runAgent({
       cfg,
@@ -218,7 +225,9 @@ export class BotCore {
     });
 
     const plain = toPlainText(result.reply);
-    await this.reply(p, plain, { seqStart: 2 });
+    const answerMode = p.scene === 'c2c' ? 'passive' : cfg.answerDelivery;
+    const delivered = await this.reply(p, plain, { mode: answerMode });
+    console.log(`[投递] 方式=${delivered.mode} 条数=${delivered.sent.length}`);
 
     this.appendMessages(convId, [
       { role: 'user', content: truncate(body, 1500) },
@@ -248,21 +257,43 @@ export class BotCore {
   }
 
   async reply(p, text, opts = {}) {
+    const first = await this.deliverOnce(p, text, opts.mode);
+    if (first.sent.length) return first;
+
+    const other = opts.mode === 'active' ? 'passive' : 'active';
+    console.warn(`[发送] ${opts.mode || 'passive'} 一条都没发出去,改用 ${other} 重试`);
+    const second = await this.deliverOnce(p, text, other);
+    this.bumpStat(`delivery_fallback_${other}`, 1);
+    return second;
+  }
+
+  async deliverOnce(p, text, mode = 'passive') {
     const cfg = this.cfg;
     const token = await this.getToken();
-    const chunks = chunkText(text, opts.chunkSize || 800, opts.maxChunks || 5);
-    if (!chunks.length) return { sent: [], errors: [] };
+    const chunks = chunkText(text, 800, 5);
+    if (!chunks.length) return { sent: [], errors: [], mode };
     const target = p.scene === 'c2c'
       ? { kind: 'c2c', id: p.targetId }
       : { kind: 'group', id: p.targetId };
+
     const r = await deliver(cfg, token, target, {
       chunks,
+      mode,
       msgId: p.messageId,
-      msgSeqStart: opts.seqStart || 1,
+      msgSeqStart: this.nextSeq(p),
     });
-    if (r.errors.length) console.warn(`[发送] 有错误: ${r.errors.join(' | ')}`);
+
+    if (r.errors.length) console.warn(`[发送·${mode}] 有错误: ${r.errors.join(' | ')}`);
+    this.bumpStat(mode === 'active' ? 'messages_active' : 'messages_passive', r.sent.length);
     this.bumpStat('messages_sent', r.sent.length);
     return r;
+  }
+
+  nextSeq(p) {
+    const key = `seq_${p.convId}`;
+    const n = (parseInt(this.kvGet(key), 10) || 0) + 1;
+    this.kvSet(key, String(n), Date.now() + 6 * 60 * 1000);
+    return n;
   }
 
   getContext(convId) {
@@ -306,6 +337,7 @@ export class BotCore {
   clearContext(convId) {
     this.sql.exec('DELETE FROM msg WHERE conv_id = ?', convId);
     this.sql.exec('DELETE FROM conv WHERE id = ?', convId);
+    this.sql.exec('DELETE FROM mem WHERE conv_id = ?', convId);
   }
 
   setSummary(convId, summary) {
@@ -518,6 +550,41 @@ export class BotCore {
     return { ok: true };
   }
 
+  memSet(convId, key, value) {
+    const k = String(key).trim().slice(0, 40);
+    const v = String(value).trim().slice(0, 500);
+    if (!k || !v) return { error: '要记的内容不能为空' };
+    const n = this.sql.exec('SELECT COUNT(*) AS n FROM mem WHERE conv_id = ?', convId).toArray()[0]?.n ?? 0;
+    const exists = this.sql.exec('SELECT 1 FROM mem WHERE conv_id = ? AND k = ?', convId, k).toArray().length;
+    if (!exists && n >= 40) return { error: '这个会话记住的东西太多了(上限 40 条),先忘掉几条' };
+    this.sql.exec(
+      'INSERT INTO mem (conv_id, k, v, updated_at) VALUES (?, ?, ?, ?) '
+      + 'ON CONFLICT(conv_id, k) DO UPDATE SET v = excluded.v, updated_at = excluded.updated_at',
+      convId, k, v, Date.now(),
+    );
+    this.bumpStat('memories_saved', 1);
+    return { ok: true, key: k, value: v };
+  }
+
+  memList(convId) {
+    return this.sql
+      .exec('SELECT k, v, updated_at FROM mem WHERE conv_id = ? ORDER BY updated_at DESC', convId)
+      .toArray()
+      .map((r) => ({ key: r.k, value: r.v, updatedAt: r.updated_at }));
+  }
+
+  memDel(convId, key) {
+    const k = String(key || '').trim();
+    if (!k) return false;
+    const before = this.memList(convId).length;
+    this.sql.exec('DELETE FROM mem WHERE conv_id = ? AND k = ?', convId, k);
+    return this.memList(convId).length < before;
+  }
+
+  memClear(convId) {
+    this.sql.exec('DELETE FROM mem WHERE conv_id = ?', convId);
+  }
+
   kvGet(k) {
     const r = this.sql.exec('SELECT v, exp FROM kv WHERE k = ?', k).toArray()[0];
     if (!r) return null;
@@ -582,6 +649,7 @@ export function parseCommand(text) {
     delete: 'delete', 'del': 'delete', '清除': 'delete', '清空': 'delete', 'reset': 'delete', '删除': 'delete',
     compress: 'compress', '压缩': 'compress', '总结': 'compress', 'compact': 'compress',
     status: 'status', '状态': 'status', 'info': 'status',
+    memory: 'memory', '记忆': 'memory', '备忘': 'memory', 'memo': 'memory',
   };
   return { name: alias[raw] ?? '', args: m[2].trim() };
 }

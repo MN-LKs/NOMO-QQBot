@@ -1,4 +1,9 @@
-const UA = 'QQBot-NB-API/1.0 (+cloudflare-workers)';
+const UA = 'NPAPI/1.0';
+
+export const ERR_URL_FORBIDDEN = 40054010;
+export const ERR_TOO_LONG = 40054007;
+export const ERR_ACTIVE_NO_PERMISSION = 40034105;
+export const ERR_PASSIVE_EXPIRED = 40034128;
 
 export async function fetchAccessToken(cfg) {
   const res = await fetch(cfg.tokenUrl, {
@@ -23,7 +28,7 @@ export async function fetchAccessToken(cfg) {
   };
 }
 
-function headers(cfg, token) {
+function headers(token) {
   return {
     'Authorization': `QQBot ${token}`,
     'Content-Type': 'application/json',
@@ -34,7 +39,7 @@ function headers(cfg, token) {
 async function post(cfg, token, path, body) {
   const res = await fetch(cfg.apiBase + path, {
     method: 'POST',
-    headers: headers(cfg, token),
+    headers: headers(token),
     body: JSON.stringify(body),
   });
   const text = await res.text();
@@ -61,8 +66,19 @@ export function sendC2CMessage(cfg, token, o) {
   return post(cfg, token, `/v2/users/${encodeURIComponent(o.openid)}/messages`, body);
 }
 
-export const ERR_URL_FORBIDDEN = 40054010;
-export const ERR_TOO_LONG = 40054007;
+export function sendActiveGroupMessage(cfg, token, groupOpenid, content) {
+  return post(cfg, token, `/v2/groups/${encodeURIComponent(groupOpenid)}/messages`, {
+    msg_type: 0,
+    content: String(content),
+  });
+}
+
+export function sendActiveC2CMessage(cfg, token, openid, content) {
+  return post(cfg, token, `/v2/users/${encodeURIComponent(openid)}/messages`, {
+    msg_type: 0,
+    content: String(content),
+  });
+}
 
 export function explainError(data) {
   const code = data?.code;
@@ -77,7 +93,7 @@ export function explainError(data) {
     40034026: 'event_id 已过期',
     40034027: '该事件不支持回复消息',
     40034101: '机器人不是群成员',
-    40034105: '主动消息无权限',
+    40034105: '主动消息无权限(需要先在 QQ 开放平台申请)',
     40034127: '没有 Markdown 模板权限',
     40034128: '被动回复时间或次数超限(5 分钟 / 最多 5 条)',
     40054002: '机器人被禁言',
@@ -91,20 +107,32 @@ export function explainError(data) {
   return `${code} ${map[code] || data?.message || ''}`.trim();
 }
 
+function sendOne(cfg, token, target, content, { mode, msgId, msgSeq }) {
+  if (mode === 'active') {
+    return target.kind === 'group'
+      ? sendActiveGroupMessage(cfg, token, target.id, content)
+      : sendActiveC2CMessage(cfg, token, target.id, content);
+  }
+  return target.kind === 'group'
+    ? sendGroupMessage(cfg, token, { groupOpenid: target.id, content, msgId, msgSeq })
+    : sendC2CMessage(cfg, token, { openid: target.id, content, msgId, msgSeq });
+}
+
 export async function deliver(cfg, token, target, opts = {}) {
-  const { chunks, chunkSize = 800, maxChunks = 5, msgId } = opts;
-  const list = chunks;
+  const { chunks, chunkSize = 800, msgId } = opts;
+  const mode = opts.mode === 'active' ? 'active' : 'passive';
   const sent = [];
   const errors = [];
   let seq = opts.msgSeqStart || 1;
 
-  for (const raw of list) {
+  for (const raw of chunks) {
     let content = raw;
-    let r = await send(target, content, seq);
+    let r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq });
+
     if (!r.ok && r.data?.code === ERR_URL_FORBIDDEN) {
       const stripped = content.replace(/https?:\/\//g, '');
       if (stripped !== content) {
-        const r2 = await send(target, stripped, seq);
+        const r2 = await sendOne(cfg, token, target, stripped, { mode, msgId, msgSeq: seq });
         if (r2.ok) {
           sent.push(stripped);
           errors.push('URL 被拦截,已去掉 https:// 后发出');
@@ -114,21 +142,23 @@ export async function deliver(cfg, token, target, opts = {}) {
         r = r2;
       }
     }
+
     if (!r.ok && r.data?.code === ERR_TOO_LONG) {
-      const half = chunkSize >> 1;
-      let ok = true;
+      const half = Math.max(50, chunkSize >> 1);
+      let allOk = true;
       for (const piece of chunkRaw(content, half)) {
-        const r3 = await send(target, piece, seq);
+        const r3 = await sendOne(cfg, token, target, piece, { mode, msgId, msgSeq: seq });
         seq++;
         if (r3.ok) sent.push(piece);
         else {
-          ok = false;
+          allOk = false;
           errors.push(explainError(r3.data));
           break;
         }
       }
-      if (ok) continue;
+      if (allOk) continue;
     }
+
     if (r.ok) {
       sent.push(content);
       seq++;
@@ -137,14 +167,7 @@ export async function deliver(cfg, token, target, opts = {}) {
     }
   }
 
-  async function send(which, content, s) {
-    if (which.kind === 'group') {
-      return sendGroupMessage(cfg, token, { groupOpenid: which.id, content, msgId, msgSeq: s });
-    }
-    return sendC2CMessage(cfg, token, { openid: which.id, content, msgId, msgSeq: s });
-  }
-
-  return { sent, errors };
+  return { sent, errors, mode };
 }
 
 function chunkRaw(text, size) {

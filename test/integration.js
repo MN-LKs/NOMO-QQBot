@@ -242,6 +242,86 @@ async function main() {
     assert(out.includes('搜索结果一'), out);
   });
 
+  await t('先回执、再用主动消息投递结果', async () => {
+    mock.plainNext();
+    const before = mock.calls.qqSend.length;
+    await say('你好呀');
+    const sent = mock.calls.qqSend.slice(before);
+    assert(sent.length >= 2, `应至少两条:回执 + 结果,实际 ${sent.length}`);
+    assert(sent[0].body.content.includes('Agent 正在运行'), `第一条应是回执: ${sent[0].body.content}`);
+    assert(sent[0].body.msg_id, '回执应该是被动回复(带 msg_id)');
+    const last = sent[sent.length - 1];
+    assert(!last.body.msg_id, '结果应该用主动消息发送(不带 msg_id)');
+  });
+
+  await t('被动回复发不出去时自动改用主动消息', async () => {
+    mock.rejectPassiveOnce();
+    mock.plainNext();
+    const before = mock.calls.qqSend.length;
+    await say('试试被动失败');
+    const sent = mock.calls.qqSend.slice(before);
+    const retriedActive = sent.some((s) => !s.body.msg_id && String(s.body.content).includes('Agent 正在运行'));
+    assert(retriedActive, `被动失败后应改用主动消息重发回执: ${JSON.stringify(sent.map((s) => s.body).slice(0, 3)).slice(0, 300)}`);
+  });
+
+  await t('主动消息没权限时自动退回被动回复', async () => {
+    mock.rejectActiveOnce();
+    mock.plainNext();
+    const before = mock.calls.qqSend.length;
+    await say('再说一句');
+    const sent = mock.calls.qqSend.slice(before);
+    const last = sent[sent.length - 1];
+    assert(last.body.msg_id, `主动失败后应退回被动回复: ${JSON.stringify(last.body).slice(0, 160)}`);
+    assert(!String(last.body.content).includes('处理这条消息时出错了'), '不应该把错误抛给用户');
+  });
+
+  await t('群记忆:记住 / 回忆 / 忘掉', async () => {
+    const core = env.BOT_CORE.core('core');
+    const ctx2 = { cfg: core.cfg, core, convId: 'g:MEM_TEST' };
+    const save = await executeTool('remember', { key: '开黑时间', value: '每周五晚八点' }, ctx2);
+    assert(save.includes('记住了'), save);
+    assert(core.memList('g:MEM_TEST').length === 1);
+    const list = await executeTool('recall', {}, ctx2);
+    assert(list.includes('每周五晚八点'), list);
+    const del = await executeTool('forget', { key: '开黑时间' }, ctx2);
+    assert(del.includes('已经忘掉'), del);
+    assert(core.memList('g:MEM_TEST').length === 0);
+    assert((await executeTool('forget', { key: '不存在' }, ctx2)).includes('没有找到'));
+  });
+
+  await t('群记忆会作为背景注入模型请求', async () => {
+    const core = env.BOT_CORE.core('core');
+    core.memSet('g:GROUP_TEST_1', '群主', '小明');
+    mock.plainNext();
+    const before = mock.calls.llmBodies.length;
+    await say('随便聊两句');
+    const body = mock.calls.llmBodies.slice(before).find((b) => Array.isArray(b.tools) && b.tools.length);
+    assert(body, '应该发出过带工具的请求');
+    assert(body.messages.some((m) => m.role === 'system' && String(m.content).includes('小明')),
+      '记忆应该出现在系统消息里');
+  });
+
+  await t('中转站用量查询', async () => {
+    const core = env.BOT_CORE.core('core');
+    const out = await executeTool('query_dashboard', {}, { cfg: { ...core.cfg, dashboardUrl: `${MOCK}/dashboard` }, core, convId: 'x' });
+    assert(out.includes('累计请求'), out);
+    assert(out.includes('deepseek-v4.1-flash'), out);
+  });
+
+  await t('随机与编解码工具', async () => {
+    const one = await executeTool('random', { min: 7, max: 7 }, {});
+    assert(one.includes('7'), one);
+    const pick = await executeTool('random', { choices: ['甲'] }, {});
+    assert(pick.includes('甲'), pick);
+    const enc = await executeTool('encode', { action: 'base64_encode', text: '你好' }, {});
+    assert(enc === '5L2g5aW9', enc);
+    assert((await executeTool('encode', { action: 'base64_decode', text: enc }, {})) === '你好');
+    const pretty = await executeTool('encode', { action: 'json_pretty', text: '{"a":1}' }, {});
+    assert(pretty.includes('\n  "a"'), pretty);
+    assert((await executeTool('encode', { action: 'url_decode', text: '%E4%BD%A0' }, {})) === '你');
+    assert((await executeTool('encode', { action: '乱写', text: 'x' }, {})).includes('执行失败'));
+  });
+
   console.log('\n=== 4. Agent 全链路 + 部署 ===');
   let deployUrl = '';
   await t('「做个网页」-> 模型调 deploy_site -> 群里收到链接', async () => {
@@ -250,10 +330,10 @@ async function main() {
     assert(m, `回复里没有部署链接: ${text.slice(0, 300)}`);
     deployUrl = m[0];
     assert(sent.every((s) => s.path === '/v2/groups/GROUP_TEST_1/messages'), '消息应发到正确的群');
-    assert(sent.every((s) => s.body.msg_id), '被动回复必须带 msg_id');
+    assert(sent[0].body.msg_id, '第一条回执应是被动回复');
     assert(sent.every((s) => s.body.msg_type === 0), '应为文本消息');
-    const seqs = sent.map((s) => s.body.msg_seq);
-    assertEq(new Set(seqs).size, seqs.length, `msg_seq 必须每次不同: ${seqs}`);
+    const seqs = sent.filter((s) => s.body.msg_id).map((s) => s.body.msg_seq);
+    assertEq(new Set(seqs).size, seqs.length, `被动回复的 msg_seq 必须每次不同: ${seqs}`);
   });
 
   await t('第一次思考回复不包含思考过程', async () => {
@@ -392,13 +472,16 @@ async function main() {
 
   console.log('\n=== 7. 失败兜底 ===');
   await t('模型 504 时机器人给用户提示而不是静默', async () => {
-    mock.breakOnce('chat');
+    mock.breakOnce(3);
     const before = mock.calls.qqSend.length;
     await postWebhook(groupEvent('这次一定会失败'));
-    await waitFor(() => mock.calls.qqSend.length >= before + 1, 30000, '等待错误提示');
-    await sleep(800);
+    await waitFor(
+      () => mock.calls.qqSend.slice(before).some((s) => /出错|失败|报错/.test(String(s.body.content))),
+      30000,
+      '等待错误提示',
+    );
     const msgs = mock.calls.qqSend.slice(before).map((s) => s.body.content).join('\n');
-    assert(/出错|失败|🤔/.test(msgs), `应有提示: ${msgs.slice(0, 200)}`);
+    assert(/出错|失败|报错/.test(msgs), `应有提示: ${msgs.slice(0, 200)}`);
   });
 
   await t('模型返回空内容时也有兜底文案', async () => {

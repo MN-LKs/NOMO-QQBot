@@ -17,6 +17,15 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
   if (conv.summary) {
     messages.push({ role: 'system', content: `以下是这个群之前聊天的摘要,作为背景参考:\n${conv.summary}` });
   }
+  const memories = core.memList ? core.memList(convId) : [];
+  if (memories.length) {
+    messages.push({
+      role: 'system',
+      content: '这个会话长期记住的信息(用户让你记的,直接当事实用):\n'
+        + memories.map((m) => `· ${m.key}: ${m.value}`).join('\n'),
+    });
+  }
+
   for (const m of conv.messages) {
     messages.push({ role: m.role, content: m.content });
   }
@@ -30,6 +39,7 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
   let rounds = 0;
   let usageTotal = 0;
   let downgraded = false;
+  let lastError = '';
 
   for (let round = 0; round < cfg.agentMaxRounds; round++) {
     if (Date.now() - started > TOTAL_BUDGET_MS) {
@@ -44,6 +54,7 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
     });
 
     if (resp.downgradedFrom) downgraded = true;
+    if (resp.error) lastError = resp.error;
     if (resp.usage?.total_tokens) usageTotal += resp.usage.total_tokens;
 
     log(`[思考] round=${round + 1} effort=${resp.downgradedFrom ? cfg.fallbackEffort : cfg.reasoningEffort} `
@@ -96,10 +107,14 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
   }
 
   if (!final.trim()) {
-    final = toolTrace.length
-      ? '事情办完了,但模型没给出说明。工具执行结果:\n'
-        + toolTrace.map((t) => `· ${t.name} → ${t.result.slice(0, 120)}`).join('\n')
-      : '抱歉,这次没生成出内容,换个说法再问我一次?';
+    if (toolTrace.length) {
+      final = '事情办完了,但模型没给出说明。工具执行结果:\n'
+        + toolTrace.map((t) => `· ${t.name} → ${t.result.slice(0, 120)}`).join('\n');
+    } else if (lastError) {
+      final = `😵 这次没能拿到模型的回复,上游接口报错了(${truncate(lastError, 120)})。稍后再试一次吧。`;
+    } else {
+      final = '抱歉,这次没生成出内容,换个说法再问我一次?';
+    }
   }
 
   return {

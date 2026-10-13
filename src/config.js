@@ -18,6 +18,8 @@ const FIXED = {
   compressChars: 6000,
   summaryChars: 2000,
   searchResults: 5,
+  dashboardUrl: 'https://manage.nexacode.dpdns.org/api/dashboard',
+  answerDelivery: 'active',
 };
 
 export const REQUIRED_VARS = ['QQ_APP_ID', 'QQ_APP_SECRET', 'LLM_BASE_URL', 'LLM_API_KEY'];

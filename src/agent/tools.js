@@ -136,6 +136,92 @@ export function buildTools(cfg) {
     {
       type: 'function',
       function: {
+        name: 'query_dashboard',
+        description: '查询当前 AI 中转站的实时用量:总额度、累计请求数、token 数、最近调用记录。'
+          + '用户问「还剩多少额度」「中转站用量」时用。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'remember',
+        description: '把一条信息长期记住(比如群规、某人的偏好、约好的时间)。'
+          + '记住之后,以后这个会话的每次对话都会自动带上它。用户说「记住 xxx」「以后都 xxx」时用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            key: { type: 'string', description: '简短的名字,例如「群活动时间」' },
+            value: { type: 'string', description: '具体内容,例如「每周五晚八点开黑」' },
+          },
+          required: ['key', 'value'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'recall',
+        description: '查看这个会话已经记住的全部内容。用户问「你记得什么」时用。',
+        parameters: { type: 'object', properties: {} },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'forget',
+        description: '忘掉一条之前记住的信息。用户说「忘掉 xxx」「不用记着了」时用。',
+        parameters: {
+          type: 'object',
+          properties: { key: { type: 'string', description: '要忘掉的那条的名字' } },
+          required: ['key'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'random',
+        description: '掷骰子、抽签、生成随机数。给 choices 就是从候选里抽一个(比如「今天谁请客」);'
+          + '给 min/max 就是范围内随机整数。',
+        parameters: {
+          type: 'object',
+          properties: {
+            choices: {
+              type: 'array',
+              description: '候选列表,例如 ["小明","小红","小刚"]',
+              items: { type: 'string' },
+            },
+            min: { type: 'number', description: '最小值,默认 1' },
+            max: { type: 'number', description: '最大值,默认 100' },
+            count: { type: 'integer', description: '抽几个,默认 1,最多 20' },
+          },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'encode',
+        description: '编解码与格式化工具:Base64 / URL / 十六进制互转,JSON 美化或压缩。'
+          + '用户贴了一段编码后的内容让你看,或者要你把内容编码时用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            action: {
+              type: 'string',
+              description: 'base64_encode / base64_decode / url_encode / url_decode / '
+                + 'hex_encode / hex_decode / json_pretty / json_minify',
+            },
+            text: { type: 'string', description: '要处理的内容' },
+          },
+          required: ['action', 'text'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
         name: 'calc',
         description: '精确计算数学表达式。凡是算术都优先用它,不要心算。支持 + - * / % ^ ( )、sqrt/log/sin 等函数、pi 和 e。',
         parameters: {

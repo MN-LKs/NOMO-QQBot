@@ -48,6 +48,10 @@ QQ 开放平台  ──HTTPS POST──▶  Cloudflare Worker(边缘节点)
                                     └─ 最终正文 → 切分成多条 → 发回 QQ 群
 ```
 
+收到消息时会**先回一句回执**(「🤖 Agent 正在运行,请稍等…」,走被动回复),
+等模型跑完再用**主动消息**把正文发出去。两种方式互为兜底:主动发不出去就退回被动,
+被动超时或超次数就改用主动,消息不会丢。单聊固定用被动回复(单聊主动消息限制更严)。
+
 几个关键取舍:
 
 **为什么必须用 Durable Object**
@@ -124,13 +128,17 @@ test/
 普通事件推送用它验签。算法是:BotSecret 反复翻倍到 32 字节作为种子,生成密钥对;
 签名对象是「时间戳 + 原始请求体」。
 
-**src/qq/webhook.js** — 把腾讯的事件翻译成内部任务。目前支持群 @ 消息、单聊消息、
-机器人被拉进群、被加好友。未知事件直接忽略,返回 200 让腾讯别再重推。
+**src/qq/webhook.js** — 把腾讯的事件翻译成内部任务。支持群 @ 消息、群普通消息、单聊消息、
+机器人被拉进群、被加好友;机器人被移出群之类的通知会记一行日志。
+
+QQ 后台可以选「**全部接收**」模式,那样所有事件(包括以后新增的类型)都会推过来。
+这套代码对未知类型是安全的:直接返回 200 让腾讯别再重推,**不会唤醒 Durable Object**,
+所以既不会出错也不浪费额度。想知道收到了哪些没处理的类型,看日志里的 `[事件] 未处理的类型: xxx`。
 
 **src/core/do.js** — 整个机器人的大脑。它维护一条任务队列,闹钟醒来就依次处理;
 还负责会话上下文(最近若干条消息 + 摘要)、部署站点的增删改查、过期清理、运行统计。
 
-**src/agent/loop.js** — Agent 循环。把「系统提示词 + 历史 + 本次问题」发给模型;
+**src/agent/loop.js** — Agent 循环。把「系统提示词 + 历史 + 长期记忆 + 本次问题」发给模型;
 如果模型要求调用工具,就执行工具、把结果回喂,再问一次;直到模型给出纯文本回复。
 每一轮都打日志,包含思考摘要、工具调用、耗时。
 
@@ -140,8 +148,9 @@ test/
 **src/agent/search.js** — 联网搜索适配层。根据你配置的网址自动识别服务商,
 拼出对应的请求,再从各种返回结构里统一抽出「标题 / 网址 / 摘要」。
 
-**src/core/schema.js** — 五张表:`kv`(事件去重、token 缓存)、`sites`(部署)、
-`conv` + `msg`(会话与消息)、`jobs`(任务队列)、`sdata`(部署页面的数据)、`stats`(统计)。
+**src/core/schema.js** — 数据表:`kv`(事件去重、token 缓存)、`sites`(部署)、
+`conv` + `msg`(会话与消息)、`jobs`(任务队列)、`sdata`(部署页面的数据)、
+`mem`(长期记忆)、`stats`(统计)。
 
 **src/serve.js** — 把部署出去的网页真正服务出来,并给页面提供一个极简后端:
 前端用 `fetch('./__data/键')` 读、用 POST 写,数据存在服务端的 SQLite 里,
@@ -168,8 +177,18 @@ test/
 
 ### 想调参数怎么办
 
-模型名、思考档位、超时、部署名额、存活时长、ID 位数这些**不是变量**,它们写在
+模型名、思考档位、超时、部署名额、存活时长、ID 位数、投递方式这些**不是变量**,它们写在
 `src/config.js` 顶部的 `FIXED` 里。想改就直接改代码,改完提交即可,不需要动 Cloudflare 后台。
+
+常改的几个:
+
+| 字段 | 默认 | 作用 |
+|---|---|---|
+| `llmModel` | `deepseek-v4.1-flash` | 换模型 |
+| `reasoningEffort` | `max` | 思考档位,`low` 会明显更快 |
+| `answerDelivery` | `active` | 群聊结果用主动消息还是被动回复 |
+| `maxSites` / `siteTtlSeconds` | 6 / 600 | 部署名额与存活时长 |
+| `dashboardUrl` | 中转站查询地址 | `query_dashboard` 工具查的就是它 |
 
 ---
 
@@ -199,6 +218,24 @@ POST 不行会自动改用 GET 再试一次。
 
 ---
 
+## 五点五、模型能用的工具
+
+| 工具 | 干什么 |
+|---|---|
+| `deploy_site` / `update_site` / `list_sites` / `read_site` / `delete_site` | 部署网页的增删改查 |
+| `web_search` | 联网搜索(走 `SEARCH_API_URL`) |
+| `fetch_url` | 抓网页正文 |
+| `query_dashboard` | 查 AI 中转站用量(地址写死在 `src/config.js` 的 `dashboardUrl`) |
+| `remember` / `recall` / `forget` | 群长期记忆,存在 Durable Object 的 `mem` 表里 |
+| `random` | 掷骰子、抽签、随机数 |
+| `encode` | Base64 / URL / 十六进制互转,JSON 美化或压缩 |
+| `calc` / `now` | 精确计算、当前时间 |
+
+加工具就三步:在 `src/agent/tools.js` 写定义(给模型看的描述)、在 `src/agent/exec.js` 写实现、
+在 `test/run.js` 的工具清单里补个名字。
+
+---
+
 ## 六、后期可以在哪里扩展
 
 **加一个新工具**
@@ -214,6 +251,11 @@ POST 不行会自动改用 GET 再试一次。
 **改部署规则**
 名额、存活时长、单站点体积上限、ID 位数都在 `src/config.js` 的 `FIXED` 里。
 「淘汰最久没改动的那个」的逻辑在 `src/core/do.js` 的 `enforceLimit`。
+
+**加一个 QQ 事件类型**
+在 `src/qq/webhook.js` 的 `normaliseEvent` 里加一个 `case`。要回复的事件返回
+`kind: 'message'` 并带上 `scene` / `targetId` / `text`;只想记个日志的返回 `kind: 'note'`;
+不想管的返回 `kind: 'ignore'`(默认)。
 
 **改机器人的说话风格**
 `src/agent/prompt.js` 的 `buildSystemPrompt` 是唯一的地方。想换人设、换语气、
