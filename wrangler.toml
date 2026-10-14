@@ -5,14 +5,29 @@ compatibility_date = "2026-09-01"
 [observability]
 enabled = true
 
+# 只保留两个变量:面板的用户名和密码。
+# 其它配置(AI 接口、搜索、APPID/AppSecret、连接方式等)全部在面板里设置,存进 D1。
 [vars]
-QQ_APP_ID        = ""
-QQ_APP_SECRET    = ""
-LLM_BASE_URL     = ""
-LLM_API_KEY      = ""
-SEARCH_API_URL   = ""
-SEARCH_API_KEY   = ""
-PUBLIC_BASE_URL  = ""
+ADMIN_USER = ""
+ADMIN_PASS = ""
+
+# ---------------------------------------------------------------------------
+# 需要两个绑定:D1 数据库(DB)和 KV 命名空间(STORE)。
+#
+# 方式一(推荐):在 Cloudflare 后台 → Workers & Pages → npapi → Settings → Bindings
+#   添加 D1 database  变量名填 DB
+#   添加 KV namespace 变量名填 STORE
+#
+# 方式二:在后台创建好后,把 ID 填到下面两段里再提交(数据库 ID 不是密钥,可以公开)
+# ---------------------------------------------------------------------------
+# [[d1_databases]]
+# binding       = "DB"
+# database_name = "npapi"
+# database_id   = ""
+
+# [[kv_namespaces]]
+# binding = "STORE"
+# id      = ""
 
 [[durable_objects.bindings]]
 name       = "BOT_CORE"
@@ -22,9 +37,6 @@ class_name = "BotCore"
 tag = "v1"
 new_sqlite_classes = ["BotCore"]
 
+# 每 2 分钟兜一次底:重连 WebSocket、处理积压消息、清理过期项目
 [triggers]
-crons = ["*/10 * * * *"]
-
-# [[routes]]
-# pattern   = "ai.example.com/*"
-# zone_name = "example.com"
+crons = ["*/2 * * * *"]

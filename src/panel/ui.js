@@ -1,0 +1,771 @@
+export function loginPage({ error = '', hint = '' } = {}) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>登录 · NPAPI 管理面板</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0;
+display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.box{width:100%;max-width:380px;background:#1e293b;border:1px solid #334155;border-radius:12px;padding:34px 30px;
+box-shadow:0 20px 50px rgba(0,0,0,.45)}
+.logo{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.logo b{font-size:19px;letter-spacing:.5px}
+.logo span{font-size:12px;color:#64748b}
+h1{font-size:15px;font-weight:500;color:#94a3b8;margin:14px 0 22px}
+label{display:block;font-size:12px;color:#94a3b8;margin:0 0 6px}
+input{width:100%;padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;
+font-size:14px;outline:none;transition:.15s}
+input:focus{border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+.field{margin-bottom:16px}
+button{width:100%;padding:11px;border:0;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;font-weight:500;
+cursor:pointer;transition:.15s}
+button:hover{background:#1d4ed8}
+button:disabled{opacity:.6;cursor:not-allowed}
+.err{background:rgba(220,38,38,.12);border:1px solid rgba(220,38,38,.4);color:#fca5a5;padding:9px 12px;
+border-radius:8px;font-size:13px;margin-bottom:16px}
+.hint{margin-top:18px;font-size:12px;color:#64748b;line-height:1.7}
+</style>
+</head>
+<body>
+<form class="box" id="f">
+  <div class="logo"><b>NPAPI</b><span>管理面板</span></div>
+  <h1>请登录以继续</h1>
+  ${error ? `<div class="err">${esc(error)}</div>` : ''}
+  <div class="field">
+    <label>用户名</label>
+    <input name="user" autocomplete="username" autofocus required>
+  </div>
+  <div class="field">
+    <label>密码</label>
+    <input name="pass" type="password" autocomplete="current-password" required>
+  </div>
+  <button type="submit" id="b">登 录</button>
+  <div class="hint">${esc(hint || '用户名与密码在 Cloudflare 后台的环境变量 ADMIN_USER / ADMIN_PASS 里设置。')}</div>
+</form>
+<script>
+var f=document.getElementById('f'),b=document.getElementById('b');
+f.addEventListener('submit',function(e){
+  e.preventDefault();
+  b.disabled=true;b.textContent='登录中…';
+  fetch('/administrator/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user:f.user.value,pass:f.pass.value})})
+  .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d}})})
+  .then(function(r){
+    if(r.ok&&r.d.ok){location.href='/administrator';return}
+    alert(r.d.error||'登录失败');b.disabled=false;b.textContent='登 录';
+  })
+  .catch(function(){alert('网络错误,请重试');b.disabled=false;b.textContent='登 录'});
+});
+</script>
+</body>
+</html>`;
+}
+
+export function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+export function panelPage({ user = '' } = {}) {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>NPAPI 管理面板</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#f1f5f9;--card:#fff;--line:#e2e8f0;--txt:#0f172a;--dim:#64748b;--pri:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
+body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--txt)}
+.app{display:flex;min-height:100vh}
+aside{width:206px;flex:0 0 206px;background:#1e293b;color:#cbd5e1;display:flex;flex-direction:column;position:fixed;top:0;bottom:0;left:0;z-index:20}
+.brand{display:flex;align-items:center;gap:9px;padding:18px 18px 14px;border-bottom:1px solid #334155}
+.brand b{color:#fff;font-size:16px;letter-spacing:.5px}
+.brand i{font-style:normal;font-size:11px;color:#64748b}
+nav{flex:1;padding:10px 0;overflow:auto}
+.nav{display:flex;align-items:center;gap:10px;padding:11px 18px;cursor:pointer;font-size:13.5px;color:#cbd5e1;
+border-left:3px solid transparent;transition:.12s;user-select:none}
+.nav:hover{background:#273449;color:#fff}
+.nav.on{background:#0f172a;color:#fff;border-left-color:#3b82f6}
+.nav svg{width:16px;height:16px;flex:0 0 16px;opacity:.85}
+.nav .dot{margin-left:auto;font-size:11px;background:#dc2626;color:#fff;border-radius:9px;padding:0 6px;line-height:16px}
+.me{border-top:1px solid #334155;padding:12px 14px;display:flex;align-items:center;gap:10px;cursor:pointer}
+.me:hover{background:#273449}
+.av{width:34px;height:34px;border-radius:50%;flex:0 0 34px;display:flex;align-items:center;justify-content:center;
+font-weight:600;color:#fff;font-size:14px}
+.me div{overflow:hidden}
+.me p{color:#fff;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.me span{font-size:11px;color:#64748b}
+main{flex:1;margin-left:206px;min-width:0}
+.top{background:#fff;border-bottom:1px solid var(--line);padding:13px 22px;display:flex;align-items:center;gap:12px;
+position:sticky;top:0;z-index:10}
+.top h2{font-size:16px;font-weight:600}
+.top .sp{flex:1}
+.wrap{padding:20px 22px 60px;max-width:1180px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px;
+box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.card h3{font-size:14px;font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+.card .sub{font-size:12px;color:var(--dim);margin-bottom:14px}
+.grid{display:grid;gap:14px}
+.g5{grid-template-columns:repeat(auto-fit,minmax(168px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.stat{background:#fff;border:1px solid var(--line);border-radius:10px;padding:15px 16px}
+.stat span{font-size:12px;color:var(--dim);display:block;margin-bottom:6px}
+.stat b{font-size:23px;font-weight:600;letter-spacing:-.5px}
+.stat i{font-style:normal;font-size:12px;color:var(--dim);margin-left:6px}
+label.f{display:block;font-size:12.5px;color:#334155;margin:0 0 5px;font-weight:500}
+input.t,select.t,textarea.t{width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:7px;font-size:13px;
+background:#fff;color:var(--txt);outline:none;font-family:inherit;transition:.12s}
+input.t:focus,select.t:focus,textarea.t:focus{border-color:var(--pri);box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+textarea.t{resize:vertical;min-height:74px;line-height:1.55}
+textarea.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.row>div{flex:1;min-width:170px}
+.fld{margin-bottom:13px}
+.btn{padding:8px 15px;border-radius:7px;border:1px solid var(--line);background:#fff;color:#334155;font-size:13px;
+cursor:pointer;transition:.12s;font-family:inherit;white-space:nowrap}
+.btn:hover{border-color:#94a3b8;background:#f8fafc}
+.btn.pri{background:var(--pri);border-color:var(--pri);color:#fff}
+.btn.pri:hover{background:#1d4ed8}
+.btn.bad{color:var(--bad);border-color:#fecaca}
+.btn.bad:hover{background:#fef2f2}
+.btn.ok{color:var(--ok);border-color:#bbf7d0}
+.btn.ok:hover{background:#f0fdf4}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.btn.sm{padding:4px 10px;font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:500;color:var(--dim);font-size:12px;padding:8px 10px;border-bottom:1px solid var(--line);
+white-space:nowrap}
+td{padding:9px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+tr:hover td{background:#f8fafc}
+.tag{display:inline-block;padding:1px 8px;border-radius:20px;font-size:11.5px;line-height:19px}
+.tag.ok{background:#dcfce7;color:#15803d}
+.tag.off{background:#f1f5f9;color:#64748b}
+.tag.warn{background:#fef3c7;color:#b45309}
+.tag.bad{background:#fee2e2;color:#b91c1c}
+.tag.blue{background:#dbeafe;color:#1d4ed8}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+.dim{color:var(--dim)}
+.small{font-size:12px}
+.bar{height:7px;background:#e2e8f0;border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--pri);border-radius:4px;transition:.3s}
+.bar i.warn{background:var(--warn)}
+.bar i.bad{background:var(--bad)}
+.sw{position:relative;width:40px;height:22px;flex:0 0 40px;border-radius:11px;background:#cbd5e1;cursor:pointer;transition:.18s}
+.sw:after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:.18s}
+.sw.on{background:var(--ok)}
+.sw.on:after{left:20px}
+.line{display:flex;align-items:center;gap:12px;padding:11px 0;border-bottom:1px solid #f1f5f9}
+.line:last-child{border-bottom:0}
+.line .g{flex:1;min-width:0}
+.line .g b{font-size:13.5px;font-weight:500;display:block}
+.line .g span{font-size:12px;color:var(--dim)}
+.empty{text-align:center;color:var(--dim);padding:36px 10px;font-size:13px}
+.modal{position:fixed;inset:0;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;
+padding:18px;z-index:100}
+.modal .box{background:#fff;border-radius:12px;width:100%;max-width:620px;max-height:88vh;overflow:auto;
+box-shadow:0 24px 60px rgba(0,0,0,.3)}
+.modal .hd{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.modal .hd b{font-size:15px;flex:1}
+.modal .bd{padding:18px 20px}
+.modal .ft{padding:14px 20px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end}
+.x{cursor:pointer;color:var(--dim);font-size:20px;line-height:1;border:0;background:none}
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:#0f172a;color:#fff;padding:10px 20px;
+border-radius:8px;font-size:13px;z-index:200;opacity:0;transition:.22s;pointer-events:none;max-width:88vw}
+.toast.on{opacity:1}
+pre.code{background:#0f172a;color:#e2e8f0;padding:14px;border-radius:8px;overflow:auto;font-size:12.5px;
+font-family:ui-monospace,Menlo,Consolas,monospace;line-height:1.6;max-height:52vh}
+.logline{display:flex;gap:10px;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:12.5px;
+font-family:ui-monospace,Menlo,Consolas,monospace;align-items:flex-start}
+.logline time{color:var(--dim);flex:0 0 128px}
+.logline .lv{flex:0 0 48px;font-size:11px}
+.logline .ms{flex:1;word-break:break-all;white-space:pre-wrap}
+.lv.debug{color:#94a3b8}.lv.info{color:#2563eb}.lv.warn{color:#d97706}.lv.error{color:#dc2626}
+.file{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid #f1f5f9;cursor:pointer}
+.file:hover{background:#f8fafc}
+.file b{font-weight:500;font-size:13px}
+.chip{display:inline-block;padding:2px 9px;border-radius:6px;background:#f1f5f9;font-size:12px;color:#475569;margin:0 6px 6px 0}
+.hint{background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;padding:10px 13px;font-size:12.5px;color:#475569;line-height:1.7}
+@media(max-width:760px){
+ aside{transform:translateX(-100%);transition:.2s}
+ aside.open{transform:none}
+ main{margin-left:0}
+ .burger{display:inline-flex!important}
+ .wrap{padding:14px}
+}
+.burger{display:none;border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 10px;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside id="sb">
+    <div class="brand">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      <div><b>NPAPI</b><br><i>管理面板</i></div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="me" id="me"></div>
+  </aside>
+  <main>
+    <div class="top">
+      <button class="burger" onclick="document.getElementById('sb').classList.toggle('open')">☰</button>
+      <h2 id="title">首页</h2>
+      <div class="sp"></div>
+      <button class="btn sm" id="refresh">刷新</button>
+    </div>
+    <div class="wrap" id="view"><div class="empty">加载中…</div></div>
+  </main>
+</div>
+<div id="modals"></div>
+<div class="toast" id="toast"></div>
+<script>
+var API='/administrator/api';
+var ME={user:'${esc(user)}'};
+var S={route:'home',data:{},settings:null,overview:null};
+function el(id){return document.getElementById(id)}
+function h(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function toast(m){var t=el('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('on')},2200)}
+function api(p,opt){opt=opt||{};opt.headers=Object.assign({'X-Requested-With':'npapi'},opt.headers||{});
+ if(opt.body&&typeof opt.body!=='string'){opt.body=JSON.stringify(opt.body);opt.headers['Content-Type']='application/json'}
+ return fetch(API+p,opt).then(function(r){
+   if(r.status===401){location.href='/administrator';return Promise.reject(new Error('未登录'))}
+   return r.json().then(function(d){if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d})
+ })}
+function bytes(n){n=Number(n)||0;if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';
+ if(n<1073741824)return (n/1048576).toFixed(2)+' MB';return (n/1073741824).toFixed(2)+' GB'}
+function ago(ts){if(!ts)return '-';var d=Date.now()-ts;if(d<60000)return Math.floor(d/1000)+' 秒前';
+ if(d<3600000)return Math.floor(d/60000)+' 分钟前';if(d<86400000)return Math.floor(d/3600000)+' 小时前';return Math.floor(d/86400000)+' 天前'}
+function left(ts){var d=Number(ts||0)-Date.now();if(d<=0)return '已过期';var s=Math.floor(d/1000);
+ if(s<60)return s+' 秒';if(s<3600)return Math.floor(s/60)+' 分 '+ (s%60) +' 秒';return Math.floor(s/3600)+' 小时 '+Math.floor(s%3600/60)+' 分'}
+function ts2s(ts){if(!ts)return '-';var d=new Date(Number(ts));function p(n){return n<10?'0'+n:''+n}
+ return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds())}
+function modal(title,body,foot){
+ var m=document.createElement('div');m.className='modal';
+ m.innerHTML='<div class="box"><div class="hd"><b>'+h(title)+'</b><button class="x">&times;</button></div><div class="bd">'+body+'</div>'+
+  (foot?'<div class="ft">'+foot+'</div>':'')+'</div>';
+ m.addEventListener('click',function(e){if(e.target===m||e.target.classList.contains('x'))m.remove()});
+ el('modals').appendChild(m);return m}
+function closeModals(){el('modals').innerHTML=''}
+function confirmBox(title,text,onOk,danger){
+ var m=modal(title,'<p style="font-size:13.5px;color:#334155;line-height:1.8">'+text+'</p>',
+  '<button class="btn" data-x>取消</button><button class="btn '+(danger?'bad':'pri')+'" data-ok>确定</button>');
+ m.querySelector('[data-x]').onclick=function(){m.remove()};
+ m.querySelector('[data-ok]').onclick=function(){m.remove();onOk()}}
+function sw(on,attr){return '<div class="sw'+(on?' on':'')+'" '+attr+'></div>'}
+var NAV=[
+ ['home','首页','M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z'],
+ ['mcp','MCP 设置','M5 3h14v5H5zM5 16h14v5H5zM12 8v8'],
+ ['projects','部署项目','M3 5h7l2 2h9v12H3zM3 11h18'],
+ ['settings','设置','M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.6H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.5 1.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'],
+ ['logs','日志','M4 4h16v16H4zM8 8h8M8 12h8M8 16h5'],
+];
+function renderNav(){
+ var r=S.route.split('/')[0];
+ el('nav').innerHTML=NAV.map(function(n){
+  return '<div class="nav'+(r===n[0]?' on':'')+'" data-go="'+n[0]+'">'+
+   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="'+n[2]+'"/></svg>'+
+   '<span>'+n[1]+'</span>'+(S.badges&&S.badges[n[0]]?'<i class="dot">'+S.badges[n[0]]+'</i>':'')+'</div>'}).join('');
+ var col='#'+['2563eb','16a34a','d97706','dc2626','7c3aed','0891b2'][(ME.user.charCodeAt(0)||78)%6];
+ el('me').innerHTML='<div class="av" style="background:'+col+'">'+h(ME.user.slice(0,1).toUpperCase())+'</div>'+
+  '<div><p>'+h(ME.user)+'</p><span>管理员</span></div>';
+}
+el('nav').addEventListener('click',function(e){var d=e.target.closest('[data-go]');if(d){go(d.dataset.go)}});
+el('me').addEventListener('click',profile);
+function profile(){
+ var m=modal('账号','<div style="display:flex;align-items:center;gap:14px;margin-bottom:16px">'+
+  '<div class="av" style="background:#2563eb;width:52px;height:52px;flex:0 0 52px;font-size:20px">'+h(ME.user.slice(0,1).toUpperCase())+'</div>'+
+  '<div><b style="font-size:16px">'+h(ME.user)+'</b><br><span class="dim small">管理员 · 用户名与密码在 Cloudflare 环境变量中修改</span></div></div>'+
+  '<div class="hint">登录状态有效期 7 天,退出后需要重新输入用户名和密码。</div>',
+  '<button class="btn" data-x>关闭</button><button class="btn bad" data-out>退出登录</button>');
+ m.querySelector('[data-x]').onclick=function(){m.remove()};
+ m.querySelector('[data-out]').onclick=function(){
+  api('/logout',{method:'POST'}).then(function(){location.href='/administrator'})};
+}
+function go(r){S.route=r;location.hash='#/'+r;render()}
+window.addEventListener('hashchange',function(){var r=(location.hash||'').replace(/^#\\/?/,'')||'home';S.route=r;render()});
+el('refresh').onclick=function(){S.settings=null;render(true)};
+function render(force){
+ var r=S.route.split('/');
+ renderNav();
+ el('sb').classList.remove('open');
+ if(r[0]==='home')return pageHome();
+ if(r[0]==='mcp')return pageMcp();
+ if(r[0]==='projects')return r[1]?pageProject(r[1]):pageProjects();
+ if(r[0]==='new')return pageNew();
+ if(r[0]==='settings')return pageSettings();
+ if(r[0]==='logs')return pageLogs();
+ return pageHome();
+}
+function setTitle(t){el('title').textContent=t}
+function pageHome(){
+ setTitle('首页');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/overview').then(function(d){
+  S.overview=d;
+  var t=d.totals||{},td=d.today||{},q=d.quota||{};
+  var max=1;(d.daily||[]).forEach(function(x){max=Math.max(max,x.visits,x.messages)});
+  v.innerHTML=
+  '<div class="grid g5" style="margin-bottom:16px">'+
+   card('累计访问',t.visits,'人次')+card('累计消息',t.messages,'条')+
+   card('累计部署',t.projects,'个')+card('今日访问',td.visits,'人次')+card('今日消息',td.messages,'条')+
+  '</div>'+
+  '<div class="grid g2">'+
+   '<div class="card"><h3>最近 14 天</h3><div class="sub">蓝色为访问人次,绿色为消息条数</div>'+
+    chart(d.daily||[])+'</div>'+
+   '<div class="card"><h3>系统信息</h3><div class="sub">当前运行状态</div>'+
+    kv('连接方式',d.mode==='webhook'?'WebHook':'WebSocket')+
+    kv('模型',(d.model||'-')+' · 思考 '+(d.effort||'-'))+
+    kv('在线项目',(t.activeProjects||0)+' / '+(q.maxProjects||0)+' 个')+
+    kv('KV 已用',bytes(q.used)+' / '+bytes(q.total))+
+    kv('KV 动态池',bytes(q.dynamic)+' · 每项目保底 '+bytes(q.per))+
+    kv('群聊数',(d.groups||[]).length+' 个')+
+    kv('运行日志',(t.errors||0)+' 条错误')+
+   '</div>'+
+  '</div>'+
+  '<div class="card"><h3>使用过本机器人的群聊</h3><div class="sub">群聊名称显示为它的 openID</div>'+
+   (d.groups&&d.groups.length?'<table><thead><tr><th>群聊 openID</th><th>消息数</th><th>最近活跃</th><th>状态</th></tr></thead><tbody>'+
+    d.groups.map(function(g){return '<tr><td class="mono">'+h(g.openid)+'</td><td>'+g.msgCount+'</td><td class="dim">'+ago(g.lastSeen)+
+     '</td><td>'+(g.enabled?'<span class="tag ok">启用</span>':'<span class="tag off">禁用</span>')+'</td></tr>'}).join('')+'</tbody></table>'
+    :'<div class="empty">还没有群聊使用过</div>')+
+  '</div>'+
+  '<div class="card"><h3>详细信息</h3><div class="sub">累计计数器</div><div class="grid g3">'+
+   kv2('累计回复',t.replies)+kv2('累计工具调用',t.tools)+kv2('累计 token',t.tokens)+
+   kv2('累计部署',t.projects)+kv2('今日部署',td.projects)+kv2('错误日志',t.errors)+
+  '</div></div>';
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function card(t,v,u){return '<div class="stat"><span>'+h(t)+'</span><b>'+(v||0)+'</b><i>'+h(u||'')+'</i></div>'}
+function kv(k,v){return '<div class="line"><div class="g"><span>'+h(k)+'</span></div><b class="small">'+h(v)+'</b></div>'}
+function kv2(k,v){return '<div><span class="dim small">'+h(k)+'</span><br><b style="font-size:17px">'+(Number(v)||0)+'</b></div>'}
+function chart(daily){
+ if(!daily.length)return '<div class="empty">暂无数据</div>';
+ var max=1;daily.forEach(function(d){max=Math.max(max,d.visits,d.messages)});
+ return '<div style="display:flex;gap:6px;align-items:flex-end;height:150px;padding-top:10px">'+
+  daily.map(function(d){
+   var hv=Math.round((d.visits/max)*110),hm=Math.round((d.messages/max)*110);
+   return '<div style="flex:1;display:flex;gap:2px;align-items:flex-end;justify-content:center" title="'+d.day+' 访问 '+d.visits+' 消息 '+d.messages+'">'+
+    '<div style="width:42%;height:'+Math.max(2,hv)+'px;background:#3b82f6;border-radius:3px 3px 0 0"></div>'+
+    '<div style="width:42%;height:'+Math.max(2,hm)+'px;background:#22c55e;border-radius:3px 3px 0 0"></div></div>'}).join('')+
+  '</div><div style="display:flex;gap:6px;margin-top:6px">'+daily.map(function(d){
+   return '<div style="flex:1;text-align:center;font-size:10px;color:#94a3b8">'+d.day.slice(5)+'</div>'}).join('')+'</div>';
+}
+function pageProjects(){
+ setTitle('部署项目');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/projects').then(function(d){
+  v.innerHTML='<div class="card"><div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">'+
+   '<div style="flex:1"><h3>在线项目</h3><div class="sub" style="margin:0">共 '+d.projects.length+' / '+d.quota.maxProjects+
+   ' 个 · 每个项目保底 '+bytes(d.quota.per)+' · 动态池 '+bytes(d.quota.dynamic)+' · 已用 '+bytes(d.quota.used)+'</div></div>'+
+   '<button class="btn pri" data-new>部署项目</button></div>'+
+   (d.projects.length?'<table><thead><tr><th>名称</th><th>ID</th><th>大小</th><th>访问</th><th>剩余有效期</th><th style="width:210px"></th></tr></thead><tbody>'+
+    d.projects.map(function(p){
+     return '<tr><td><b>'+h(p.name)+'</b><br><span class="dim small">'+h(p.url)+'</span></td>'+
+      '<td class="mono small">'+h(p.id)+'</td><td class="small">'+bytes(p.bytes)+'</td><td class="small">'+p.hits+'</td>'+
+      '<td class="small">'+left(p.expiresAt)+'</td>'+
+      '<td style="text-align:right"><button class="btn sm" data-open="'+h(p.id)+'">详情</button> '+
+      '<button class="btn sm ok" data-ext="'+h(p.id)+'">续期</button> '+
+      '<button class="btn sm bad" data-del="'+h(p.id)+'">删除</button></td></tr>'}).join('')+'</tbody></table>'
+    :'<div class="empty">还没有部署任何项目,点右上角「部署项目」创建一个</div>')+
+   '<div class="hint" style="margin-top:14px">项目只支持纯 HTML / CSS / JS 静态文件,不再执行服务端代码。'+
+   '删除或过期后,它在 KV 与 D1 里的数据会一并清掉。</div>'+
+  '</div>';
+  v.querySelector('[data-new]').onclick=function(){go('new')};
+  v.querySelectorAll('[data-open]').forEach(function(b){b.onclick=function(){go('projects/'+b.dataset.open)}});
+  v.querySelectorAll('[data-ext]').forEach(function(b){b.onclick=function(){
+   confirmBox('延续有效期','确认给这个项目增加 '+d.extendMinutes+' 分钟有效期?',function(){
+    api('/projects/'+b.dataset.ext+'/extend',{method:'POST',body:{seconds:d.extendMinutes*60}})
+     .then(function(r){toast('已续期,新到期时间 '+ts2s(r.expiresAt));render()}).catch(function(e){toast(e.message)})})}});
+  v.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
+   var p=d.projects.filter(function(x){return x.id===b.dataset.del})[0]||{};
+   confirmBox('删除项目','确认删除「'+h(p.name||'')+'」?<br><br>它的全部文件、KV 占用和 D1 数据都会被永久删除,无法恢复。',function(){
+    api('/projects/'+b.dataset.del,{method:'DELETE'}).then(function(){toast('已删除');render()}).catch(function(e){toast(e.message)})},true)}});
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function pageProject(id){
+ setTitle('项目详情');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/projects/'+id).then(function(d){
+  var p=d.project,q=d.quota,u=d.usage;
+  var pct=Math.min(100,Math.round((u.bytes/Math.max(1,q.limit))*100));
+  v.innerHTML='<div class="card"><div style="display:flex;align-items:center;gap:12px">'+
+   '<div style="flex:1"><h3>'+h(p.name)+'</h3><div class="sub" style="margin:0">'+h(p.description||'没有说明')+'</div></div>'+
+   '<button class="btn" data-back>返回列表</button></div></div>'+
+  '<div class="grid g3">'+
+   '<div class="card"><h3>基本信息</h3>'+
+    kv('项目 ID',p.id)+kv('访问网址',p.url)+kv('创建时间',ts2s(p.createdAt))+
+    kv('到期时间',ts2s(p.expiresAt))+'<div class="line"><div class="g"><span>剩余有效期</span></div><b class="small">'+left(p.expiresAt)+'</b></div>'+
+    kv('访问次数',p.hits)+kv('来源',p.source==='ai'?'AI 部署':'面板部署')+
+    '<div style="margin-top:14px;display:flex;gap:8px"><button class="btn ok" data-ext>延续 '+d.extendMinutes+' 分钟</button>'+
+    '<button class="btn" data-open-url>打开网址</button><button class="btn bad" data-del>删除项目</button></div></div>'+
+   '<div class="card"><h3>占用情况</h3><div class="sub">KV 文件占用 / 本项目可用额度</div>'+
+    '<div class="bar"><i class="'+(pct>85?'bad':pct>60?'warn':'')+'" style="width:'+pct+'%"></i></div>'+
+    '<div class="small dim" style="margin:6px 0 14px">'+bytes(u.bytes)+' / '+bytes(q.limit)+' ('+pct+'%)</div>'+
+    kv('保底空间',bytes(q.base))+kv('动态分配',bytes(q.share))+kv('文件数',u.files)+
+    kv('压缩前',bytes(u.rawBytes))+kv('D1 数据',bytes(u.dataBytes)+' / '+bytes(d.dataQuota))+
+    kv('D1 键数',u.dataKeys)+'</div>'+
+   '<div class="card"><h3>文件列表</h3><div class="sub">点击查看内容</div>'+
+    (d.files.length?d.files.map(function(f){
+     return '<div class="file" data-f="'+h(f.path)+'"><b>'+h(f.path)+'</b><span class="dim small" style="margin-left:auto">'+
+      h(f.ct.split(';')[0])+' · '+bytes(f.size)+(f.gz?' · 已压缩':'')+'</span></div>'}).join('')
+    :'<div class="empty">没有文件</div>')+'</div>'+
+  '</div>';
+  v.querySelector('[data-back]').onclick=function(){go('projects')};
+  v.querySelector('[data-open-url]').onclick=function(){window.open(p.url,'_blank')};
+  v.querySelector('[data-ext]').onclick=function(){
+   confirmBox('延续有效期','确认增加 '+d.extendMinutes+' 分钟?',function(){
+    api('/projects/'+id+'/extend',{method:'POST',body:{seconds:d.extendMinutes*60}})
+     .then(function(r){toast('已续期到 '+ts2s(r.expiresAt));render()}).catch(function(e){toast(e.message)})})};
+  v.querySelector('[data-del]').onclick=function(){
+   confirmBox('删除项目','确认删除「'+h(p.name)+'」?<br><br>文件、KV 占用与 D1 数据都会永久删除。',function(){
+    api('/projects/'+id,{method:'DELETE'}).then(function(){toast('已删除');go('projects')}).catch(function(e){toast(e.message)})},true)};
+  v.querySelectorAll('[data-f]').forEach(function(b){b.onclick=function(){viewFile(id,b.dataset.f)}});
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function viewFile(id,path){
+ var m=modal('文件 · '+path,'<div class="empty">加载中…</div>','<button class="btn" data-x>关闭</button>');
+ m.querySelector('[data-x]').onclick=function(){m.remove()};
+ api('/projects/'+id+'/file?path='+encodeURIComponent(path)).then(function(d){
+  var b=m.querySelector('.bd');
+  if(d.kind==='image')b.innerHTML='<img src="'+d.data+'" style="max-width:100%;border-radius:8px">';
+  else if(d.kind==='video')b.innerHTML='<video src="'+d.data+'" controls style="max-width:100%;border-radius:8px"></video>';
+  else if(d.kind==='audio')b.innerHTML='<audio src="'+d.data+'" controls style="width:100%"></audio>';
+  else if(d.kind==='text')b.innerHTML='<pre class="code">'+h(d.data)+'</pre>';
+  else b.innerHTML='<div class="hint">这是二进制文件('+h(d.ct)+', '+bytes(d.size)+'),无法直接预览。</div>'+
+   '<div style="margin-top:12px"><a class="btn" href="'+d.data+'" download>下载文件</a></div>';
+ }).catch(function(e){m.querySelector('.bd').innerHTML='<div class="empty">'+h(e.message)+'</div>'});
+}
+function pageNew(){
+ setTitle('部署项目');
+ var files=[{path:'index.html',content:''}];
+ var v=el('view');
+ v.innerHTML='<div class="empty">加载中…</div>';
+ loadSettings().then(function(){draw()}).catch(function(){draw()});
+ function draw(){
+  v.innerHTML='<div class="card"><h3>部署新项目</h3><div class="sub">纯静态文件,支持 HTML / CSS / JS / 图片。提交后会得到一个 8 位 ID 与访问网址。</div>'+
+   '<div class="row"><div><label class="f">项目名称</label><input class="t" id="n" placeholder="例如:2048 小游戏"></div>'+
+   '<div><label class="f">有效期(分钟)</label><input class="t" id="ttl" type="number" min="1" value="'+S.ttlMinutes+'"></div></div>'+
+   '<div class="fld" style="margin-top:13px"><label class="f">说明(可选)</label><input class="t" id="d" placeholder="一句话说明"></div>'+
+   '<div class="fld"><label class="f">文件</label>'+files.map(function(f,i){
+     return '<div style="border:1px solid #e2e8f0;border-radius:9px;padding:12px;margin-bottom:10px">'+
+      '<div class="row" style="align-items:center"><div style="flex:0 0 240px"><input class="t mono" data-p="'+i+'" value="'+h(f.path)+'" placeholder="index.html"></div>'+
+      '<div style="flex:1"><span class="dim small">'+(f.content.length?f.content.length+' 字符':'空')+'</span></div>'+
+      '<button class="btn sm bad" data-rm="'+i+'">移除</button></div>'+
+      '<textarea class="t mono" data-c="'+i+'" style="margin-top:10px;min-height:150px" placeholder="粘贴文件内容…">'+h(f.content)+'</textarea></div>'}).join('')+
+    '<button class="btn" id="addf">+ 新增文件</button></div>'+
+   '<div style="display:flex;gap:10px"><button class="btn pri" id="sub">部署</button><button class="btn" id="back">返回列表</button></div>'+
+   '<div class="hint" style="margin-top:14px">单个文件最大 '+bytes(S.maxFileBytes)+'。HTML 里可以直接用相对路径引用同项目的其它文件。'+
+   '需要存数据的话,页面里可以调用 <span class="mono">fetch("./__data/键", {method:"POST", body:"值"})</span> 保存,用 <span class="mono">fetch("./__data/键")</span> 读取。</div></div>';
+  v.querySelector('#back').onclick=function(){go('projects')};
+  v.querySelector('#addf').onclick=function(){files.push({path:'',content:''});draw()};
+  v.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){files.splice(Number(b.dataset.rm),1);if(!files.length)files.push({path:'index.html',content:''});draw()}});
+  v.querySelectorAll('[data-p]').forEach(function(i){i.oninput=function(){files[Number(i.dataset.p)].path=i.value}});
+  v.querySelectorAll('[data-c]').forEach(function(i){i.oninput=function(){files[Number(i.dataset.c)].content=i.value}});
+  v.querySelector('#sub').onclick=function(){
+   var payload={name:v.querySelector('#n').value,description:v.querySelector('#d').value,
+    ttlMinutes:Number(v.querySelector('#ttl').value)||S.ttlMinutes,files:files.filter(function(f){return f.path&&f.content})};
+   if(!payload.name){toast('请填写项目名称');return}
+   if(!payload.files.length){toast('至少需要一个有内容的文件');return}
+   var b=v.querySelector('#sub');b.disabled=true;b.textContent='部署中…';
+   api('/projects',{method:'POST',body:payload}).then(function(r){toast('部署成功');go('projects/'+r.id)})
+    .catch(function(e){toast(e.message);b.disabled=false;b.textContent='部署'})};
+ }
+ draw();
+}
+function loadSettings(force){
+ if(S.settings&&!force)return Promise.resolve(S.settings);
+ return api('/settings').then(function(d){S.settings=d;S.ttlMinutes=d.deploy.ttlMinutes;S.extendMinutes=d.deploy.extendMinutes;S.maxFileBytes=d.maxFileBytes;return d});
+}
+function pageSettings(){
+ setTitle('设置');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ loadSettings(true).then(function(d){
+  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin;
+  var headers=function(o){return h(JSON.stringify(o||{},null,0))};
+  v.innerHTML=
+  '<div class="card"><h3>AI 接口</h3><div class="sub">机器人的大模型接口,支持任意 OpenAI 兼容的 /chat/completions</div>'+
+   '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="llm-url" value="'+h(llm.baseUrl)+'" placeholder="https://api.example.com/v1"></div>'+
+   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="llm-key" value="'+h(llm.apiKey)+'" placeholder="sk-..."></div>'+
+   '<div class="row"><div><label class="f">模型 ID</label><input class="t mono" id="llm-model" value="'+h(llm.model)+'"></div>'+
+   '<div style="flex:0 0 150px"><label class="f">&nbsp;</label><button class="btn" id="llm-list" style="width:100%">获取模型列表</button></div>'+
+   '<div style="flex:0 0 150px"><label class="f">&nbsp;</label><button class="btn pri" id="llm-test" style="width:100%">测试模型</button></div></div>'+
+   '<div class="fld" id="llm-models"></div>'+
+   '<div class="row"><div><label class="f">推理等级</label><select class="t" id="llm-effort">'+
+    ['none','minimal','low','medium','high','max'].map(function(x){return '<option value="'+x+'"'+(llm.reasoningEffort===x?' selected':'')+'>'+x+'</option>'}).join('')+
+   '</select></div><div><label class="f">深度思考</label><select class="t" id="llm-think"><option value="1"'+(llm.deepThinking!==false?' selected':'')+'>开启</option><option value="0"'+(llm.deepThinking===false?' selected':'')+'>关闭</option></select></div></div>'+
+   '<div class="fld"><label class="f">自定义请求头(JSON,可留空)</label><textarea class="t mono" id="llm-headers" placeholder=\\'{"X-Foo":"bar"}\\'>'+headers(llm.headers)+'</textarea></div>'+
+   '<button class="btn pri" id="llm-save">保存</button></div>'+
+
+  '<div class="card"><h3>联网搜索</h3><div class="sub">支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别</div>'+
+   '<div class="fld"><label class="f">搜索接口地址</label><input class="t mono" id="se-url" value="'+h(se.url)+'" placeholder="https://api.example.com/search"></div>'+
+   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="se-key" value="'+h(se.key)+'"></div>'+
+   '<div class="fld"><label class="f">自定义请求头(JSON)</label><textarea class="t mono" id="se-headers">'+headers(se.headers)+'</textarea></div>'+
+   '<button class="btn pri" id="se-save">保存</button> <button class="btn" id="se-test">测试搜索</button></div>'+
+
+  '<div class="card"><h3>人设提示词</h3><div class="sub">留空使用默认人设。这段文字会作为系统提示词的一部分发给模型</div>'+
+   '<textarea class="t" id="persona" style="min-height:120px">'+h(s.persona)+'</textarea>'+
+   '<div style="margin-top:12px"><button class="btn pri" id="persona-save">保存</button></div></div>'+
+
+  '<div class="card"><h3>QQ 机器人</h3><div class="sub">连接方式可以随时切换</div>'+
+   '<div class="row"><div><label class="f">APPID</label><input class="t mono" id="qq-id" value="'+h(qq.appId)+'"></div>'+
+   '<div><label class="f">APP Secret</label><input class="t mono" id="qq-secret" value="'+h(qq.appSecret)+'"></div></div>'+
+   '<div class="fld" style="margin-top:13px"><label class="f">运行环境</label><select class="t" id="qq-env">'+
+    '<option value="prod"'+(qq.sandbox?'':' selected')+'>正式环境(机器人已上线)</option>'+
+    '<option value="sandbox"'+(qq.sandbox?' selected':'')+'>沙箱环境(还在开发调试)</option></select></div>'+
+   '<div class="fld"><label class="f">连接方式</label><select class="t" id="qq-mode">'+
+    '<option value="websocket"'+(qq.mode!=='webhook'?' selected':'')+'>WebSocket(推荐,无需开放平台配置)</option>'+
+    '<option value="webhook"'+(qq.mode==='webhook'?' selected':'')+'>WebHook(需要在开放平台填回调地址)</option></select></div>'+
+   '<div class="fld" id="qq-hook" style="display:'+(qq.mode==='webhook'?'block':'none')+'">'+
+    '<label class="f">回调地址(填到 QQ 开放平台 → 开发设置 → 回调配置)</label>'+
+    '<div class="row"><div><input class="t mono" id="qq-cb" value="'+h(d.callbackUrl)+'"></div>'+
+    '<div style="flex:0 0 110px"><button class="btn" id="qq-copy">复制</button></div></div></div>'+
+   '<button class="btn pri" id="qq-save">保存并应用</button> <span class="small dim" id="qq-state">'+h(d.modeText||'')+'</span></div>'+
+
+  '<div class="card"><h3>群聊权限</h3><div class="sub">控制哪些群可以使用机器人</div>'+
+   '<div class="line"><div class="g"><b>允许所有群聊</b><span>开启后任何拉过机器人的群都能用,并自动加入列表</span></div>'+sw(gr.allowAll,'data-t="allowAll"')+'</div>'+
+   '<div style="margin-top:12px" id="gr-list">'+groupRows(gr.list)+'</div>'+
+   '<div class="row" style="margin-top:12px"><div><input class="t mono" id="gr-add" placeholder="输入群聊 openID"></div>'+
+   '<div style="flex:0 0 110px"><button class="btn" id="gr-addb">添加</button></div></div>'+
+   '<div class="hint" style="margin-top:12px">在群里 @机器人 发送 <span class="mono">/查信息</span> 就能看到这个群的 openID。</div></div>'+
+
+  '<div class="card"><h3>管理员</h3><div class="sub">除面板账号外,谁可以在群里管理机器人</div>'+
+   '<div class="line"><div class="g"><b>群管理员即机器人管理员</b><span>群主/管理员在群里可以直接使用管理指令</span></div>'+sw(ad.groupAdmins,'data-t="groupAdmins"')+'</div>'+
+   '<div style="margin-top:12px" id="ad-list">'+adminRows(ad.openIds)+'</div>'+
+   '<div class="row" style="margin-top:12px"><div><input class="t mono" id="ad-add" placeholder="输入用户 openID"></div>'+
+   '<div style="flex:0 0 110px"><button class="btn" id="ad-addb">添加</button></div></div></div>'+
+
+  '<div class="card"><h3>部署参数</h3><div class="sub">KV 空间分配:固定保留 + 每项目保底 + 动态池(按访问量优先分配)</div>'+
+   '<div class="row"><div><label class="f">默认有效期(分钟)</label><input class="t" type="number" id="dp-ttl" value="'+dep.ttlSeconds/60+'"></div>'+
+   '<div><label class="f">每次续期(分钟)</label><input class="t" type="number" id="dp-ext" value="'+dep.extendSeconds/60+'"></div>'+
+   '<div><label class="f">同时可部署项目数</label><input class="t" type="number" id="dp-max" value="'+dep.maxProjects+'"></div></div>'+
+   '<div class="row" style="margin-top:13px"><div><label class="f">固定保留(MB)</label><input class="t" type="number" id="dp-res" value="'+Math.round(dep.reserveBytes/1048576)+'"></div>'+
+   '<div><label class="f">每项目保底(MB)</label><input class="t" type="number" id="dp-per" value="'+Math.round(dep.perProjectBytes/1048576)+'"></div>'+
+   '<div><label class="f">项目数据配额(KB)</label><input class="t" type="number" id="dp-data" value="'+Math.round(dep.dataQuotaBytes/1024)+'"></div>'+
+   '<div><label class="f">每日部署上限(次)</label><input class="t" type="number" id="dp-day" value="'+dep.maxPerDay+'"></div></div>'+
+   '<div style="margin-top:13px"><div class="line"><div class="g"><b>允许项目存数据</b><span>关闭后部署的页面无法使用 /__data/ 接口</span></div>'+sw(dep.allowData!==false,'data-t="allowData"')+'</div></div>'+
+   '<div class="hint" style="margin-top:12px">KV 免费额度约 1 GB。当前容量上限:最多 '+d.quota.capacity+' 个项目。'+
+   (d.quota.clamped?'<br><b style="color:#b45309">注意:你设置的数量超过容量,保存时会自动降到 '+d.quota.capacity+'。</b>':'')+'</div>'+
+   '<div style="margin-top:12px"><button class="btn pri" id="dp-save">保存</button></div></div>'+
+
+  '<div class="card"><h3>日志</h3><div class="sub">调试模式会记录更详细的过程,占用更多存储</div>'+
+   '<div class="line"><div class="g"><b>调试模式</b><span>记录每次请求、工具参数、上游原始返回</span></div>'+sw(lg.debug,'data-t="debug"')+'</div>'+
+   '<div class="row" style="margin-top:13px"><div><label class="f">保留天数</label><input class="t" type="number" id="lg-days" value="'+lg.retentionDays+'"></div>'+
+   '<div><label class="f">最多条数</label><input class="t" type="number" id="lg-max" value="'+lg.maxRows+'"></div></div>'+
+   '<div style="margin-top:12px"><button class="btn pri" id="lg-save">保存</button> <button class="btn" id="lg-clean">立即清理</button></div></div>';
+  bindSettings(v);
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function groupRows(list){
+ if(!list||!list.length)return '<div class="hint">还没有添加群聊。开启「允许所有群聊」后会自动收集。</div>';
+ return '<table><thead><tr><th>群聊 openID</th><th>添加时间</th><th style="width:90px"></th></tr></thead><tbody>'+
+  list.map(function(g){return '<tr><td class="mono small">'+h(g.openid)+'</td><td class="small dim">'+ts2s(g.addedAt)+
+   '</td><td style="text-align:right"><button class="btn sm bad" data-grdel="'+h(g.openid)+'">移除</button></td></tr>'}).join('')+'</tbody></table>';
+}
+function adminRows(list){
+ if(!list||!list.length)return '<div class="hint">还没有单独添加管理员 openID。</div>';
+ return '<table><thead><tr><th>用户 openID</th><th>添加时间</th><th style="width:90px"></th></tr></thead><tbody>'+
+  list.map(function(g){return '<tr><td class="mono small">'+h(g.openid)+'</td><td class="small dim">'+ts2s(g.addedAt)+
+   '</td><td style="text-align:right"><button class="btn sm bad" data-addel="'+h(g.openid)+'">移除</button></td></tr>'}).join('')+'</tbody></table>';
+}
+function jparse(t,fb){try{return t.trim()?JSON.parse(t):fb}catch(e){toast('请求头不是合法的 JSON');throw e}}
+function bindSettings(v){
+ function save(patch,btn){
+  if(btn){btn.disabled=true;var t=btn.textContent;btn.textContent='保存中…'}
+  api('/settings',{method:'POST',body:patch}).then(function(){toast('已保存');S.settings=null;loadSettings(true)})
+   .catch(function(e){toast(e.message)})
+   .then(function(){if(btn){btn.disabled=false;btn.textContent=t}});
+ }
+ v.querySelector('#llm-save').onclick=function(){var b=this;
+  var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){return}
+  save({llm:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),
+   model:v.querySelector('#llm-model').value.trim(),headers:hh,reasoningEffort:v.querySelector('#llm-effort').value,
+   deepThinking:v.querySelector('#llm-think').value==='1'}},b)};
+ v.querySelector('#llm-list').onclick=function(){var b=this;b.disabled=true;b.textContent='获取中…';
+  var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){b.disabled=false;b.textContent='获取模型列表';return}
+  api('/models',{method:'POST',body:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),headers:hh}})
+  .then(function(r){
+   if(!r.models.length){toast('接口没有返回模型');return}
+   v.querySelector('#llm-models').innerHTML='<label class="f">接口返回的模型(点击选用)</label><div>'+
+    r.models.map(function(x){return '<span class="chip" data-m="'+h(x)+'" style="cursor:pointer">'+h(x)+'</span>'}).join('')+'</div>';
+   v.querySelectorAll('[data-m]').forEach(function(c){c.onclick=function(){v.querySelector('#llm-model').value=c.dataset.m;toast('已填入 '+c.dataset.m)}});
+  }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='获取模型列表'})};
+ v.querySelector('#llm-test').onclick=function(){testLLM(v)};
+ v.querySelector('#se-save').onclick=function(){var b=this;var hh;try{hh=jparse(v.querySelector('#se-headers').value,{})}catch(e){return}
+  save({search:{url:v.querySelector('#se-url').value.trim(),key:v.querySelector('#se-key').value.trim(),headers:hh}},b)};
+ v.querySelector('#se-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
+  api('/test-search',{method:'POST',body:{query:'今天有什么新闻'}}).then(function(r){
+   modal('搜索测试结果','<pre class="code">'+h(JSON.stringify(r,null,2))+'</pre>','<button class="btn" data-x>关闭</button>')
+    .querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()};
+  }).catch(function(e){modal('搜索测试失败','<div class="hint" style="border-color:#fecaca;color:#b91c1c">'+h(e.message)+'</div>','<button class="btn" data-x>关闭</button>')
+   .querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()}})
+  .then(function(){b.disabled=false;b.textContent='测试搜索'})};
+ v.querySelector('#persona-save').onclick=function(){save({persona:v.querySelector('#persona').value},this)};
+ v.querySelector('#qq-mode').onchange=function(){v.querySelector('#qq-hook').style.display=this.value==='webhook'?'block':'none'};
+ v.querySelector('#qq-copy').onclick=function(){var i=v.querySelector('#qq-cb');i.select();
+  try{navigator.clipboard.writeText(i.value);toast('已复制')}catch(e){document.execCommand('copy');toast('已复制')}};
+ v.querySelector('#qq-save').onclick=function(){var b=this;b.disabled=true;b.textContent='应用中…';
+  api('/settings',{method:'POST',body:{qq:{appId:v.querySelector('#qq-id').value.trim(),
+   appSecret:v.querySelector('#qq-secret').value.trim(),mode:v.querySelector('#qq-mode').value,
+   sandbox:v.querySelector('#qq-env').value==='sandbox'}}})
+  .then(function(r){toast(r.note||'已保存并应用');S.settings=null;render()})
+  .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='保存并应用'})};
+ function tog(sel,path){var n=v.querySelector(sel);if(!n)return;n.onclick=function(){
+  var on=!n.classList.contains('on');n.classList.toggle('on',on);
+  var patch={};patch[path[0]]={};patch[path[0]][path[1]]=on;save(patch)}};
+ tog('[data-t="allowAll"]',['groups','allowAll']);
+ tog('[data-t="groupAdmins"]',['admin','groupAdmins']);
+ tog('[data-t="allowData"]',['deploy','allowData']);
+ tog('[data-t="debug"]',['logs','debug']);
+ v.querySelector('#gr-addb').onclick=function(){var id=v.querySelector('#gr-add').value.trim();if(!id)return;
+  api('/groups',{method:'POST',body:{openid:id,action:'add'}}).then(function(){toast('已添加');render()}).catch(function(e){toast(e.message)})};
+ v.querySelector('#ad-addb').onclick=function(){var id=v.querySelector('#ad-add').value.trim();if(!id)return;
+  api('/admins',{method:'POST',body:{openid:id,action:'add'}}).then(function(){toast('已添加');render()}).catch(function(e){toast(e.message)})};
+ v.querySelectorAll('[data-grdel]').forEach(function(b){b.onclick=function(){
+  api('/groups',{method:'POST',body:{openid:b.dataset.grdel,action:'remove'}}).then(function(){toast('已移除');render()}).catch(function(e){toast(e.message)})}});
+ v.querySelectorAll('[data-addel]').forEach(function(b){b.onclick=function(){
+  api('/admins',{method:'POST',body:{openid:b.dataset.addel,action:'remove'}}).then(function(){toast('已移除');render()}).catch(function(e){toast(e.message)})}});
+ v.querySelector('#dp-save').onclick=function(){var b=this;b.disabled=true;b.textContent='保存中…';
+  api('/settings',{method:'POST',body:{deploy:{
+   ttlSeconds:Math.max(60,Number(v.querySelector('#dp-ttl').value)*60||600),
+   extendSeconds:Math.max(60,Number(v.querySelector('#dp-ext').value)*60||600),
+   maxProjects:Math.max(1,Number(v.querySelector('#dp-max').value)||5),
+   reserveBytes:Math.max(0,Number(v.querySelector('#dp-res').value)||0)*1048576,
+   perProjectBytes:Math.max(1,Number(v.querySelector('#dp-per').value)||64)*1048576,
+   dataQuotaBytes:Math.max(0,Number(v.querySelector('#dp-data').value)||0)*1024,
+   maxPerDay:Math.max(1,Number(v.querySelector('#dp-day').value)||50)}}})
+  .then(function(r){toast(r.note||'已保存');S.settings=null;render()})
+  .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='保存'})};
+ v.querySelector('#lg-save').onclick=function(){save({logs:{retentionDays:Number(v.querySelector('#lg-days').value)||7,
+  maxRows:Number(v.querySelector('#lg-max').value)||8000}},this)};
+ v.querySelector('#lg-clean').onclick=function(){var b=this;b.disabled=true;
+  api('/logs/cleanup',{method:'POST'}).then(function(r){toast('清理完成,剩余 '+r.count+' 条')}).catch(function(e){toast(e.message)})
+  .then(function(){b.disabled=false})};
+}
+function testLLM(v){
+ var url=v.querySelector('#llm-url').value.trim(),key=v.querySelector('#llm-key').value.trim();
+ var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){return}
+ var m=modal('测试模型','<div class="empty">正在获取模型列表…</div>','<button class="btn" data-x>关闭</button>');
+ m.querySelector('[data-x]').onclick=function(){m.remove()};
+ api('/models',{method:'POST',body:{baseUrl:url,apiKey:key,headers:hh}}).then(function(r){
+  var bd=m.querySelector('.bd');
+  bd.innerHTML='<div class="fld"><label class="f">选择要测试的模型</label><select class="t" id="tm">'+
+   r.models.map(function(x){return '<option value="'+h(x)+'">'+h(x)+'</option>'}).join('')+'</select></div>'+
+   '<div style="display:flex;gap:10px;margin-bottom:14px"><button class="btn pri" id="go">开始测试</button>'+
+   '<button class="btn" id="copy" style="display:none">复制结果</button></div><div id="out"></div>';
+  bd.querySelector('#go').onclick=function(){
+   var b=this;b.disabled=true;b.textContent='测试中…';bd.querySelector('#out').innerHTML='<div class="empty">正在请求…</div>';
+   api('/test-llm',{method:'POST',body:{baseUrl:url,apiKey:key,headers:hh,model:bd.querySelector('#tm').value}}).then(function(r){
+    var ok1=r.chat&&r.chat.ok,ok2=r.tool&&r.tool.ok;
+    bd.querySelector('#out').innerHTML=
+     '<div class="line"><div class="g"><b>基础对话</b><span>'+h(r.chat&&r.chat.detail||'')+'</span></div>'+
+      (ok1?'<span class="tag ok">通过</span>':'<span class="tag bad">失败</span>')+'</div>'+
+     '<div class="line"><div class="g"><b>工具调用</b><span>'+h(r.tool&&r.tool.detail||'')+'</span></div>'+
+      (ok2?'<span class="tag ok">通过</span>':'<span class="tag bad">失败</span>')+'</div>'+
+     (r.chat&&r.chat.reply?'<div style="margin-top:12px"><label class="f">模型回复</label><pre class="code">'+h(r.chat.reply)+'</pre></div>':'')+
+     (!ok1||!ok2?'<div style="margin-top:12px"><label class="f">详细报错</label><pre class="code">'+h(JSON.stringify(r,null,2))+'</pre></div>':'');
+    var c=bd.querySelector('#copy');c.style.display='inline-block';
+    c.onclick=function(){navigator.clipboard.writeText(JSON.stringify(r,null,2));toast('已复制')};
+   }).catch(function(e){bd.querySelector('#out').innerHTML='<div class="hint" style="border-color:#fecaca;color:#b91c1c">'+h(e.message)+'</div>'})
+   .then(function(){b.disabled=false;b.textContent='开始测试'})};
+ }).catch(function(e){
+  m.querySelector('.bd').innerHTML='<div class="hint" style="border-color:#fecaca;color:#b91c1c">获取模型列表失败:'+h(e.message)+'</div>'+
+   '<div style="margin-top:12px"><button class="btn pri" id="still">仍然测试当前模型</button></div>';
+  m.querySelector('#still').onclick=function(){m.remove();testLLM(v)};
+ });
+}
+function pageLogs(){
+ setTitle('日志');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ var lv=S.logLevel||'';
+ api('/logs?limit=300'+(lv?'&level='+lv:'')).then(function(d){
+  v.innerHTML='<div class="card"><div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+   '<div style="flex:1"><h3>运行日志</h3><div class="sub" style="margin:0">共 '+d.count+' 条 · 每 '+(d.retentionDays||7)+' 天自动清理,超过 '+(d.maxRows||8000)+' 条也会自动清理</div></div>'+
+   '<div class="line" style="border:0;padding:0;gap:8px"><span class="small dim">调试模式</span>'+sw(d.debug,'data-dbg')+'</div>'+
+   '<button class="btn sm" data-dl>下载</button><button class="btn sm" data-cp>复制</button><button class="btn sm bad" data-cl>清空</button></div>'+
+   '<div style="margin:14px 0 10px;display:flex;gap:6px;flex-wrap:wrap">'+
+    [['','全部'],['debug','debug'],['info','info'],['warn','warn'],['error','error']].map(function(x){
+     return '<button class="btn sm'+((lv===x[0])?' pri':'')+'" data-lv="'+x[0]+'">'+x[1]+'</button>'}).join('')+
+   '</div><div style="max-height:62vh;overflow:auto">'+
+   (d.logs.length?d.logs.map(function(l){
+    return '<div class="logline"><time>'+ts2s(l.ts)+'</time><span class="lv '+l.level+'">'+l.level+'</span>'+
+     '<span class="ms">'+h(l.msg)+'</span></div>'}).join('')
+    :'<div class="empty">没有日志</div>')+'</div></div>';
+  v.querySelector('[data-dbg]').onclick=function(){var on=!this.classList.contains('on');
+   api('/settings',{method:'POST',body:{logs:{debug:on}}}).then(function(){toast('调试模式已'+(on?'开启':'关闭'));render()})};
+  v.querySelector('[data-dl]').onclick=function(){
+   fetch('/administrator/api/logs/download',{headers:{'X-Requested-With':'npapi'}}).then(function(r){return r.blob()})
+   .then(function(b){var a=document.createElement('a');a.href=URL.createObjectURL(b);
+    a.download='npapi-logs-'+new Date().toISOString().slice(0,10)+'.txt';a.click();toast('已开始下载')})};
+  v.querySelector('[data-cp]').onclick=function(){
+   var txt=d.logs.map(function(l){return ts2s(l.ts)+' ['+l.level+'] '+l.msg}).join('\\n');
+   navigator.clipboard.writeText(txt).then(function(){toast('已复制 '+d.logs.length+' 条')})};
+  v.querySelector('[data-cl]').onclick=function(){confirmBox('清空日志','确认删除全部日志?此操作不可恢复。',function(){
+   api('/logs',{method:'DELETE'}).then(function(){toast('已清空');render()})},true)};
+  v.querySelectorAll('[data-lv]').forEach(function(b){b.onclick=function(){S.logLevel=b.dataset.lv;render()}});
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function pageMcp(){
+ setTitle('MCP 设置');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/mcp').then(function(d){
+  v.innerHTML='<div class="card"><h3>MCP 服务器</h3><div class="sub">接入 Model Context Protocol 服务器,把它的工具挂给机器人使用</div>'+
+   (d.servers.length?d.servers.map(function(s){
+    var tools=s.tools||{list:[],enabled:[]};
+    return '<div style="border:1px solid #e2e8f0;border-radius:9px;padding:14px;margin-bottom:12px">'+
+     '<div style="display:flex;align-items:center;gap:10px"><div style="flex:1">'+
+      '<b style="font-size:14px">'+h(s.name)+'</b> <span class="tag '+(s.enabled?'ok':'off')+'">'+(s.enabled?'已启用':'已停用')+'</span> '+
+      '<span class="tag blue">'+h(s.transport)+'</span>'+
+      '<br><span class="dim small mono">'+h(s.url)+'</span></div>'+
+      '<div class="line" style="border:0;padding:0">'+sw(!!s.enabled,'data-en="'+h(s.id)+'"')+'</div>'+
+      '<button class="btn sm" data-test="'+h(s.id)+'">测试</button>'+
+      '<button class="btn sm bad" data-del="'+h(s.id)+'">删除</button></div>'+
+     '<div class="small dim" style="margin-top:8px">'+(s.status||'未测试')+' · 工具 '+((tools.enabled||[]).length)+'/'+((tools.list||[]).length)+' 个已启用</div>'+
+     (tools.list&&tools.list.length?'<div style="margin-top:10px">'+tools.list.map(function(t){
+      var on=(tools.enabled||[]).indexOf(t.name)>=0;
+      return '<div class="line"><div class="g"><b class="mono small">'+h(t.name)+'</b><span>'+h(t.description||'')+'</span></div>'+
+       sw(on,'data-tool="'+h(s.id)+'|'+h(t.name)+'"')+'</div>'}).join('')+'</div>':'')+
+    '</div>'}).join('')
+   :'<div class="empty">还没有添加 MCP 服务器</div>')+'</div>'+
+  '<div class="card"><h3>添加服务器</h3><div class="sub">支持 Streamable HTTP 与 SSE 两种传输</div>'+
+   '<div class="row"><div><label class="f">名称</label><input class="t" id="m-name" placeholder="例如:文件助手"></div>'+
+   '<div><label class="f">传输方式</label><select class="t" id="m-tr"><option value="auto">自动识别</option><option value="http">Streamable HTTP</option><option value="sse">SSE</option></select></div></div>'+
+   '<div class="fld" style="margin-top:13px"><label class="f">服务器地址</label><input class="t mono" id="m-url" placeholder="https://example.com/mcp"></div>'+
+   '<div class="fld"><label class="f">自定义请求头(JSON,可留空)</label><textarea class="t mono" id="m-hd" placeholder=\\'{"Authorization":"Bearer xxx"}\\'></textarea></div>'+
+   '<button class="btn pri" id="m-add">添加并连接</button></div>';
+  v.querySelector('#m-add').onclick=function(){var b=this;
+   var hd;try{hd=jparse(v.querySelector('#m-hd').value,{})}catch(e){return}
+   var name=v.querySelector('#m-name').value.trim(),url=v.querySelector('#m-url').value.trim();
+   if(!name||!url){toast('名称和地址都要填');return}
+   b.disabled=true;b.textContent='连接中…';
+   api('/mcp',{method:'POST',body:{name:name,url:url,transport:v.querySelector('#m-tr').value,headers:hd}})
+    .then(function(r){toast(r.note||'已添加');render()}).catch(function(e){toast(e.message)})
+    .then(function(){b.disabled=false;b.textContent='添加并连接'})};
+  v.querySelectorAll('[data-en]').forEach(function(n){n.onclick=function(){
+   api('/mcp/'+n.dataset.en,{method:'POST',body:{enabled:!n.classList.contains('on')}}).then(function(){render()})}});
+  v.querySelectorAll('[data-tool]').forEach(function(n){n.onclick=function(){
+   var p=n.dataset.tool.split('|');
+   api('/mcp/'+p[0],{method:'POST',body:{tool:p[1],on:!n.classList.contains('on')}}).then(function(){render()})}});
+  v.querySelectorAll('[data-test]').forEach(function(b){b.onclick=function(){
+   var old=b.textContent;b.disabled=true;b.textContent='连接中…';
+   api('/mcp/'+b.dataset.test+'/test',{method:'POST'}).then(function(r){toast('连接成功,发现 '+r.count+' 个工具');render()})
+    .catch(function(e){toast('连接失败:'+e.message)}).then(function(){b.disabled=false;b.textContent=old})}});
+  v.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
+   confirmBox('删除 MCP','确认删除这个服务器?',function(){api('/mcp/'+b.dataset.del,{method:'DELETE'})
+    .then(function(){toast('已删除');render()})},true)}});
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+(function boot(){
+ var r=(location.hash||'').replace(/^#\\/?/,'');
+ S.route=r||'home';
+ render();
+})();
+</script>
+</body>
+</html>`;
+}

@@ -1,96 +1,61 @@
-# 安全须知
+# 安全说明
 
-## 一、仓库里不留任何凭据(重要)
+## 一、密钥都放在哪
 
-这个仓库是**公开**的,所以规则很简单:**凭据一律不进仓库。**
+**仓库里没有任何真实密钥。** `wrangler.toml` 里的两个变量都是空值。
 
-`wrangler.toml` 的 `[vars]` 里所有值都是空字符串 —— 一共 7 个:
-`QQ_APP_ID`、`QQ_APP_SECRET`、`LLM_BASE_URL`、`LLM_API_KEY`、
-`SEARCH_API_URL`、`SEARCH_API_KEY`、`PUBLIC_BASE_URL`。
-真实值只存在两个地方:
+| 放哪 | 内容 |
+| --- | --- |
+| Cloudflare 环境变量 | 只有 `ADMIN_USER` 与 `ADMIN_PASS`(面板账号) |
+| D1 数据库 `settings` 表 | AI 接口地址与 Key、搜索 Key、QQ APPID 与 AppSecret 等 |
 
-| 场景 | 放哪里 |
-|---|---|
-| 线上 | Cloudflare 后台 → Workers & Pages → 你的 Worker → **Settings → Variables and Secrets** |
-| 本地调试 | 项目根目录的 `.dev.vars`(已经在 `.gitignore` 里,不会被提交) |
+这样安排的好处:密钥不再散落在环境变量和文档里,改配置不用重新部署,
+而且 D1 里的数据在 Cloudflare 侧是静态加密的。
 
-在后台添加时,**密钥类的选 `Secret` 类型**(`QQ_APP_SECRET`、`LLM_API_KEY`、`SEARCH_API_KEY`),
-普通配置选文本即可。也可以用命令行:
+> 面板回读密钥时会打码成 `sk-a****1234`。
+> 如果你只是改别的字段,把打码值原样提交回来,后端会自动保留原值,不会把真 Key 覆盖成星号。
 
-```bash
-npx wrangler secret put QQ_APP_SECRET
-npx wrangler secret put LLM_API_KEY
-npx wrangler secret put SEARCH_API_KEY
-```
-
-### 提交前的强制检查
+## 二、提交代码前
 
 ```bash
 node tools/scan-secrets.js     # 或者 npm run check:secrets
 ```
 
-它会扫全仓库,命中下面任何一类就直接失败(退出码 1):
+它会在仓库里搜:常见密钥前缀(`sk-`、`ghp_`、`AKIA` 等)、私钥块、
+被填了值的 `wrangler.toml` 变量、`*.dev.vars`、疑似 QQ APPID/AppSecret 的数字串。
+命中任何一条就退出码 1。
 
-- OpenAI / 中转站 `sk-…`、Anthropic `sk-ant-…`
-- GitHub `ghp_…` / `github_pat_…` / `ghu_…` / `ghs_…`
-- AWS `AKIA…`、Slack `xox…`、Google `AIza…`、JWT、`-----BEGIN PRIVATE KEY-----`
-- `wrangler.toml` 的 `[vars]` 里任何一个该留空的键被填了值
-- 形如真实 QQ AppID 的 10 位数字
+`npm test` 和 `npm run test:all` 都会先跑一遍这个检查。
 
-CI(`.github/workflows/test.yml`)里也会跑同一份检查,所以即使本地忘了,PR 也会被拦。
+## 三、面板的防护
 
-### 万一还是推上去了
+- 用户名密码用**定长比较**,避免时序侧信道
+- 同一 IP 连续失败 5 次锁定 15 分钟(计数在 D1 里,重启不丢)
+- 会话是 HMAC 签名的 Cookie:`HttpOnly` + `Secure` + `SameSite=Strict` + `Path=/administrator`
+- 改密码会让所有旧会话立刻失效(签名密钥由账号密码派生)
+- 所有写接口都校验同源,拒绝跨站提交
+- 面板路径固定是 `/administrator`,但**没有登录就什么都看不到**
 
-**删文件没用,Git 历史里还在,别人 clone 一次就能拿到。** 正确顺序:
+## 四、回调与消息
 
-1. 立刻去对应平台**轮换**:QQ 开放平台重新生成 AppSecret、上游网关重置 API Key、GitHub 吊销 token
-2. 再把仓库里的值改成空字符串
-3. 如果敏感程度高,考虑把仓库设为私有,或干脆重建仓库
+- WebHook 模式的验签失败一律 **401**(fail-closed),不存在「验证不了就放行」
+- WebSocket 模式根本不需要公网入口,别人扫不到
+- 群消息默认**只处理白名单里的群**;要放开得在面板里显式打开「允许所有群聊」
+- 部署的项目**不执行服务端代码**,只吐静态文件,没法拿你的域名跑任意逻辑
+- 文件路径里的 `..`、绝对路径、非法字符都会被拒绝
 
-## 二、回调地址为什么不用加口令
+## 五、出事了怎么办
 
-回调地址是公开在互联网上的,任何人都能往 `/qq/webhook` 发请求。但这不构成风险:
+| 情况 | 处理 |
+| --- | --- |
+| 面板密码可能泄露 | 在 Cloudflare 后台改 `ADMIN_PASS`,旧会话立即全部失效 |
+| AI Key 泄露 | 去上游后台吊销并换新,在面板里重新填 |
+| AppSecret 泄露 | 去 QQ 机器人管理端重置,在面板里重新填 |
+| 有人狂刷部署页面 | 面板里缩短部署时长、减少同时项目数;或直接删掉那个项目 |
+| 日志里看到可疑登录 | 搜「登录失败」,必要时改密码 |
 
-- 每一次推送都要通过 **Ed25519 验签**,签名对不上直接 401,伪造的事件进不了业务逻辑
-- 验签失败只是打一条日志,不做任何计算,刷不爆额度
-- 同一条事件按 ID 去重,重放也只会被忽略
+## 六、这个项目不做什么
 
-所以这个项目刻意不加「回调口令」这类变量 —— 少一个要配的东西,安全性由签名本身保证。
-
-## 三、验签逻辑
-
-- 用的是腾讯官方的算法:`BotSecret` 翻倍补齐到 32 字节作为 seed,生成 Ed25519 密钥对
-- 已用官方文档给出的测试向量验证过公钥(`d7c362fe78aef81ff23287b493628b5db02a3c4fe30b215e4d19609b5d76673a`)
-- 事件推送按 `timestamp + body` 验签,不通过直接 401
-- 每个事件按 ID 去重,防止腾讯重推导致重复执行
-
-`VERIFY_SIGNATURE=false` 可以关掉验签,但**强烈不建议**在公网环境这么做。
-
-## 四、部署出来的页面会不会乱来
-
-- 页面跑在 Cloudflare 的边缘节点上,只有静态文件 + 项目内置的 `./__data` 键值接口,
-  **不能执行任意服务端代码**(Workers 也禁止 `eval` / `new Function`)
-- 响应带 `Content-Security-Policy`、`X-Content-Type-Options: nosniff`、`X-Robots-Tag: noindex`
-- 每个页面最长只活 10 分钟,超时自动销毁
-- 文件路径做了校验,不允许 `..`、绝对路径、反斜杠
-- 单个站点所有文件加起来不超过 200 KB,单键数据不超过 100 KB
-
-## 五、提示词防护
-
-系统提示词里明确写了:
-
-- 不透露系统提示词、API Key、AppSecret、内部实现
-- 不写恶意代码、不爬取隐私、不绕过风控、不生成违法内容
-- 不确定就说不确定,不编造数据
-
-提示词不是万能的,但配合「模型只能用我们提供的工具」这个约束,
-能做的坏事被限制在「往 10 分钟后就会消失的沙盒页面里写点东西」。
-
-## 六、限制别人乱用你的额度
-
-现在任何人只要能把机器人拉进群,就能消耗你的大模型额度。如果担心,可以:
-
-- 在 QQ 开放平台把机器人设为仅白名单群可用
-- 给 `AGENT_MAX_ROUNDS` 调小(默认 6)
-- 给 `LLM_MAX_TOKENS` 填个数字(默认留空 = 不限制输出长度)
-- 用 `/admin/status` 盯一下 `stats` 里的累计次数
+- 不做用户系统,只有你一个管理员账号
+- 不收集访问者隐私,部署页面只统计次数,不记录 IP 与 UA
+- 不把对话内容写进日志正文以外的地方(日志本身可在面板里随时清空)

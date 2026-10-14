@@ -244,5 +244,98 @@ export function buildTools(cfg) {
         },
       },
     },
+      ...SANDBOX_TOOLS,
   ];
 }
+
+const SANDBOX_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'fs_write',
+      description: '在沙盒里创建或覆盖一个文件。沙盒是给你写代码用的草稿区(2 MB 上限),不会对外公开;'
+        + '想让人看到要用 fs_deploy 或 deploy_site 部署出去。适合先写好几个文件再一起部署。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件路径,例如 index.html 或 css/style.css' },
+          content: { type: 'string', description: '文件完整内容' },
+        },
+        required: ['path', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fs_read',
+      description: '读取沙盒里某个文件的内容。改代码之前先看一遍。',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: '文件路径' } },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fs_list',
+      description: '列出沙盒里有哪些文件,以及每个文件的大小。',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: '可选,只看某个目录下的文件' } },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fs_edit',
+      description: '在沙盒文件里做局部替换。适合只改几行,不用把整个文件重写一遍。',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: '文件路径' },
+          find: { type: 'string', description: '要被替换掉的原文本(必须和文件里完全一致)' },
+          replace: { type: 'string', description: '替换成什么' },
+        },
+        required: ['path', 'find', 'replace'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fs_delete',
+      description: '删掉沙盒里的一个文件。',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string', description: '文件路径' } },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fs_deploy',
+      description: '把沙盒里的文件直接部署成公开网页,返回链接。'
+        + '不填 paths 就部署沙盒里的全部文件;必须包含 index.html。',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: '项目名,中英文数字都行' },
+          description: { type: 'string', description: '一句话说明' },
+          dir: { type: 'string', description: '可选,只部署某个目录下的文件' },
+          paths: {
+            type: 'array',
+            description: '可选,只部署这些文件',
+            items: { type: 'string' },
+          },
+        },
+        required: ['name'],
+      },
+    },
+  },
+];

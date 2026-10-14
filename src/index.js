@@ -1,135 +1,125 @@
-import { loadConfig, ALL_VARS, REQUIRED_VARS } from './config.js';
+import { loadEnv, missingEnv, FIXED } from './config.js';
+import { loadCfg, getRaw } from './store/settings.js';
 import { handleWebhook } from './qq/webhook.js';
 import { serveSite, splitSitePath } from './serve.js';
 import { BotCore } from './core/do.js';
-import { isReservedPath } from './util/id.js';
+import { handlePanelApi, jsonRes } from './panel/api.js';
+import { loginPage, panelPage } from './panel/ui.js';
+import { isAuthed, checkCredentials, issue, cookieHeader, clearCookieHeader, readCookie, lockedFor, noteFail, clearFail, sameOrigin } from './panel/auth.js';
+import { write as logWrite } from './store/logs.js';
+import { ensureSchema } from './store/db.js';
 
 export { BotCore };
 
 export default {
   async fetch(request, env, ctx) {
-    const cfg = loadConfig(env);
     const url = new URL(request.url);
     const path = url.pathname;
 
     try {
-      if (path === '/health' || path === '/healthz') {
-        return json({ ok: true, service: 'npapi', ts: Date.now() });
+      const missing = missingEnv(env);
+      if (path === FIXED.panelPath || path.startsWith(`${FIXED.panelPath}/`)) {
+        return await panel(request, env, url, missing);
       }
 
-      if (path === '/favicon.ico') {
-        return new Response(null, { status: 204 });
+      if (missing.length) {
+        return html(`<h2 style="font:16px sans-serif;padding:40px">还没有配置管理员账号,请在 Cloudflare 后台添加环境变量:${missing.join(' / ')}</h2>`, 503);
       }
 
-      if (path === '/check') {
-        return await selfCheck(env, cfg, url);
-      }
+      if (path === '/favicon.ico') return new Response(null, { status: 204 });
+
+      const cfg = await loadCfg(env);
 
       if (path === cfg.webhookPath || path.startsWith(`${cfg.webhookPath}/`)) {
+        if (cfg.mode !== 'webhook') return jsonRes({ error: '当前是 WebSocket 模式,回调地址未启用' }, 403);
         return await handleWebhook(request, cfg, env);
       }
 
       const { id } = splitSitePath(path);
-      if (!id || !isReservedPath(id)) {
-        const res = await serveSite(env, cfg, request, url);
+      if (id && !RESERVED.has(id.toLowerCase())) {
+        const res = await serveSite(env, cfg, request, url, ctx);
         if (res) return res;
       }
 
-      return json({ error: 'not found', path }, 404);
+      return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
     } catch (e) {
-      console.error('[worker] 未捕获异常', e?.stack || e);
-      return json({ error: 'internal error', message: String(e?.message || e) }, 500);
+      await logWrite(env, 'error', 'worker', `未捕获异常 ${path}:${e?.stack || e}`).catch(() => null);
+      return new Response('Internal Error', { status: 500 });
     }
   },
 
   async scheduled(_event, env, ctx) {
     try {
+      if (!env?.BOT_CORE) return;
       const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
-      ctx.waitUntil(stub.fetch('https://do/tick').then((r) => r.text()).catch(() => null));
-    } catch (e) {
-      console.error('[cron]', e?.stack || e);
+      ctx.waitUntil(stub.fetch('https://do/tick', { method: 'POST' }).then((r) => r.text()).catch(() => null));
+    } catch {
+      /* ignore */
     }
   },
 };
 
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
+const RESERVED = new Set([
+  'qq', 'api', 'admin', 'administrator', 'health', 'check', 'favicon', 'robots',
+  'index', 's', 'd', 'static', 'assets', '__data', 'cron', 'www', 'app', 'login',
+  'logout', 'null', 'undefined', 'test', 'panel', 'v1',
+]);
+
+function html(body, status = 200, extra = {}) {
+  return new Response(body, {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...extra },
   });
 }
 
-function mask(s) {
-  const v = String(s || '');
-  if (!v) return '';
-  if (v.length <= 8) return '***';
-  return `${v.slice(0, 4)}…${v.slice(-4)}(${v.length}位)`;
-}
+async function panel(request, env, url, missing) {
+  const path = url.pathname;
 
-async function selfCheck(env, cfg, url) {
-  const checks = [];
-  const notes = [];
-  const add = (name, ok, detail) => checks.push({ name, ok, detail });
-
-  add('QQ_APP_ID', !!cfg.appId, cfg.appId ? '已设置' : '未设置 ← 必填');
-  add('QQ_APP_SECRET', !!cfg.appSecret, cfg.appSecret ? mask(cfg.appSecret) : '未设置 ← 必填');
-  add('LLM_BASE_URL', !!cfg.llmBaseUrl, cfg.llmBaseUrl || '未设置 ← 必填,例如 https://api.example.com/v1');
-  add('LLM_API_KEY', !!cfg.llmApiKey, cfg.llmApiKey ? mask(cfg.llmApiKey) : '未设置 ← 必填');
-  add('SEARCH_API_URL', true, cfg.searchApiUrl ? `已设置(${cfg.searchApiUrl})` : '未设置 → 联网搜索不可用');
-  add('SEARCH_API_KEY', true, cfg.searchApiKey ? '已设置' : '未设置 → 联网搜索不可用');
-  add('PUBLIC_BASE_URL', true, cfg.publicBaseUrl || '未设置 → 部署链接只返回相对路径');
-
-  add('模型', true, `${cfg.llmModel}(思考 ${cfg.reasoningEffort})`);
-  add('输出上限', true, '不限制(请求不带 max_tokens)');
-  add('部署名额 / 存活', true, `${cfg.maxSites} 个 / ${Math.round(cfg.siteTtlSeconds / 60)} 分钟`);
-  add('部署 ID', true, `${cfg.idLen} 位 ${cfg.idCharset}`);
-
-  const hook = `${url.protocol}//${url.host}${cfg.webhookPath}`;
-  add('回调地址(填到 QQ 开放平台)', true, hook);
-
-  let doOk = false;
-  let doDetail = '';
-  try {
-    const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
-    const r = await stub.fetch('https://do/status');
-    const d = await r.json();
-    doOk = true;
-    doDetail = `在线部署 ${d.sites} 个,队列 ${d.pending} 待处理`;
-  } catch (e) {
-    doDetail = String(e?.message || e);
-  }
-  add('Durable Object', doOk, doDetail);
-
-  const missing = REQUIRED_VARS.filter((k) => !String(env?.[k] ?? '').trim());
-  if (missing.length) notes.push(`还缺必填变量:${missing.join(' / ')}`);
-
-  if (url.searchParams.get('live') === '1') {
-    try {
-      const res = await fetch(`${cfg.llmBaseUrl}/models`, {
-        headers: { 'Authorization': `Bearer ${cfg.llmApiKey}`, 'User-Agent': 'NPAPI/1.0' },
-      });
-      add('大模型网关连通', res.ok, `HTTP ${res.status}`);
-    } catch (e) {
-      add('大模型网关连通', false, String(e?.message || e));
+  if (path === `${FIXED.panelPath}/api/login`) {
+    if (request.method !== 'POST') return jsonRes({ error: '只接受 POST' }, 405);
+    if (!sameOrigin(request)) return jsonRes({ error: '来源不合法' }, 403);
+    const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+    const lock = await lockedFor(env, ip);
+    if (lock > 0) {
+      return jsonRes({ error: `尝试次数过多,请 ${Math.ceil(lock / 60000)} 分钟后再试` }, 429);
     }
+    let body = {};
     try {
-      const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
-      await (await stub.fetch('https://do/tick')).text();
-      add('Durable Object 闹钟', true, '已触发一次');
-    } catch (e) {
-      add('Durable Object 闹钟', false, String(e?.message || e));
+      body = await request.json();
+    } catch {
+      body = {};
     }
+    if (!checkCredentials(env, body.user, body.pass)) {
+      const r = await noteFail(env, ip);
+      await logWrite(env, 'warn', 'panel', `登录失败 ip=${ip} 累计 ${r.fails} 次`);
+      const left = Math.max(0, FIXED.loginMaxFails - r.fails);
+      return jsonRes({ error: left > 0 ? `用户名或密码不对(还剩 ${left} 次机会)` : '尝试次数过多,已临时锁定 15 分钟' }, 401);
+    }
+    await clearFail(env, ip);
+    await logWrite(env, 'info', 'panel', `管理员登录成功 ip=${ip}`);
+    const token = await issue(env);
+    return jsonRes({ ok: true }, 200, { 'Set-Cookie': cookieHeader(token, FIXED.sessionDays * 86400) });
   }
 
-  const ok = checks.every((c) => c.ok);
-  return new Response(JSON.stringify({
-    ok,
-    variables: ALL_VARS,
-    checks,
-    notes,
-    hint: '带 ?live=1 会真的调一次上游网关',
-  }, null, 2), {
-    status: ok ? 200 : 500,
-    headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
+  if (path === `${FIXED.panelPath}/api/logout`) {
+    return jsonRes({ ok: true }, 200, { 'Set-Cookie': clearCookieHeader() });
+  }
+
+  const authed = await isAuthed(request, env);
+  if (!authed) {
+    if (path.startsWith(`${FIXED.panelPath}/api/`)) return jsonRes({ error: '未登录' }, 401);
+    return html(loginPage({ hint: missing.length ? `还缺少环境变量:${missing.join(' / ')}` : '' }));
+  }
+
+  if (path.startsWith(`${FIXED.panelPath}/api/`)) {
+    if (request.method !== 'GET' && !sameOrigin(request)) return jsonRes({ error: '来源不合法' }, 403);
+    if (env?.DB) await ensureSchema(env.DB);
+    return await handlePanelApi(request, env, url);
+  }
+
+  const settings = await getRaw(env).catch(() => null);
+  if (!settings) {
+    return html(loginPage({ error: 'D1 数据库没有绑定,请先在 Cloudflare 后台绑定名为 DB 的 D1 数据库' }));
+  }
+  return html(panelPage({ user: env.ADMIN_USER }));
 }

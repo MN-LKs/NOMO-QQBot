@@ -1,543 +1,502 @@
-// 端到端集成测试(不需要 workerd)。
-//
-// 用 test/harness.js 在 Node 里模拟 Cloudflare 运行环境:
-//   Worker 入口、Durable Object、SQLite 存储、闹钟调度 全部真跑,
-//   只有「大模型网关」和「QQ 开放平台」被 test/mock-upstream.js 换成本地假服务。
-//
-// 跑法:node --experimental-sqlite test/integration.js
-
-import fs from 'node:fs';
-import path from 'node:path';
-import { startMock } from './mock-upstream.js';
+import http from 'node:http';
+import worker from '../src/index.js';
 import { makeEnv, makeCtx, startAlarmRunner } from './harness.js';
 import { keysFromSecret } from '../src/qq/sign.js';
-import { executeTool } from '../src/agent/exec.js';
 import { bytesToHex, concatBytes, utf8 } from '../src/util/bytes.js';
 
-const MOCK = 'http://127.0.0.1:8790';
-const BASE = 'http://bot.test';
-const APP_SECRET = 'test-app-secret-not-real-0123456789';
-
-let pass = 0, fail = 0;
-const failures = [];
+let pass = 0;
+const fails = [];
 async function t(name, fn) {
   try {
     await fn();
     pass++;
-    console.log(`  ✅ ${name}`);
+    console.log(`  ✓ ${name}`);
   } catch (e) {
-    fail++;
-    failures.push(`${name}: ${e?.message || e}`);
-    console.log(`  ❌ ${name} — ${e?.message || e}`);
+    fails.push(`${name} — ${e?.message || e}`);
+    console.log(`  ✗ ${name} — ${e?.message || e}`);
   }
 }
-function assert(c, m) { if (!c) throw new Error(m || '断言失败'); }
-function assertEq(a, b, m) { if (a !== b) throw new Error(`${m || '不相等'}: ${JSON.stringify(a)} !== ${JSON.stringify(b)}`); }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function waitFor(fn, timeoutMs = 20000, label = '') {
-  const t0 = Date.now();
-  for (;;) {
-    const v = await fn();
-    if (v) return v;
-    if (Date.now() - t0 > timeoutMs) throw new Error(`等待超时: ${label}`);
-    await sleep(50);
-  }
+function assert(c, m) {
+  if (!c) throw new Error(m || '断言失败');
 }
 
-let worker;
-let env;
-let ctx;
-let mock;
-let alarmRunner;
-let groupSeq = 0;
-
-async function req(p, init) {
-  return worker.fetch(new Request(BASE + p, init), env, ctx);
+function listen(handler) {
+  return new Promise((resolve) => {
+    const server = http.createServer(handler);
+    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port }));
+  });
 }
 
-async function signBody(timestamp, bodyStr) {
-  const { privateKey } = await keysFromSecret(APP_SECRET);
-  const raw = new Uint8Array(await crypto.subtle.sign(
-    { name: 'Ed25519' }, privateKey, concatBytes(utf8(timestamp), utf8(bodyStr)),
-  ));
-  return bytesToHex(raw);
-}
-
-function groupEvent(text) {
-  groupSeq++;
-  return {
-    id: `EV_${Date.now()}_${groupSeq}`,
-    op: 0,
-    s: groupSeq,
-    t: 'GROUP_AT_MESSAGE_CREATE',
-    d: {
-      id: `MSG_${groupSeq}`,
-      content: text,
-      timestamp: new Date().toISOString(),
-      group_openid: 'GROUP_TEST_1',
-      author: { member_openid: 'USER_TEST_1', nickname: '测试小明' },
-    },
-  };
-}
-
-async function postWebhook(payload, { signIt = true, tamper = null } = {}) {
-  let body = typeof payload === 'string' ? payload : JSON.stringify(payload);
-  if (tamper) body = tamper(body);
-  const ts = String(Math.floor(Date.now() / 1000));
-  const headers = { 'Content-Type': 'application/json' };
-  if (signIt) {
-    headers['X-Signature-Ed25519'] = await signBody(ts, body);
-    headers['X-Signature-Timestamp'] = ts;
-  }
-  const res = await req('/qq/webhook', { method: 'POST', headers, body });
-  const text = await res.text();
-  let j = null;
-  try { j = JSON.parse(text); } catch { /* ignore */ }
-  return { status: res.status, text, json: j };
-}
-
-/**
- * 发一条群消息并等机器人回完。
- * 命令类回复只有 1 条,Agent 回复是「正在思考」+ 正文共 2 条,
- * 所以统一等 1 条 + 静默窗口。
- */
-async function say(text, timeout = 25000) {
-  await sleep(400); // 排空上一条测试可能还在路上的消息
-  const before = mock.calls.qqSend.length;
-  const r = await postWebhook(groupEvent(text));
-  assertEq(r.status, 200, '回调应返回 200');
-  await waitFor(() => mock.calls.qqSend.length >= before + 1, timeout, `等待回复: ${text}`);
-  await sleep(1200); // 等可能的第二条
-  const sent = mock.calls.qqSend.slice(before);
-  return { sent, text: sent.map((s) => s.body.content).join('\n') };
-}
-
-// ===========================================================================
-async function main() {
-  console.log('\n启动假上游(模型 + QQ 开放平台)…');
-  mock = await startMock({ llmPort: 8790 });
-
-  env = makeEnv({
-    QQ_APP_ID: '100000001',
-    QQ_APP_SECRET: APP_SECRET,
-    LLM_BASE_URL: `${MOCK}/v1`,
-    LLM_API_KEY: 'mock-key',
-    SEARCH_API_URL: `${MOCK}/search`,
-    SEARCH_API_KEY: 'mock-search-key',
-    PUBLIC_BASE_URL: BASE,
-    QQ_API_BASE: MOCK,
-    QQ_TOKEN_URL: `${MOCK}/app/getAppAccessToken`,
-  });
-  ctx = makeCtx();
-  alarmRunner = startAlarmRunner(env);
-
-  const mod = await import('../src/index.js');
-  worker = mod.default;
-
-  console.log('\n=== 1. 基础路由 ===');
-  await t('GET /health', async () => {
-    const r = await req('/health');
-    assertEq(r.status, 200);
-    assertEq((await r.json()).ok, true);
-  });
-
-  await t('GET /check 全部必检项通过', async () => {
-    const r = await req('/check');
-    const d = await r.json();
-    assertEq(r.status, 200, `自检失败项: ${JSON.stringify(d.checks?.filter((c) => !c.ok))}`);
-    assertEq(d.ok, true);
-  });
-
-  await t('未知路径 404', async () => {
-    assertEq((await req('/no/such/path')).status, 404);
-  });
-
-  await t('/check 列出了全部 7 个变量', async () => {
-    const d = await (await req('/check')).json();
-    assertEq(d.variables.length, 7);
-    assert(d.variables.includes('SEARCH_API_URL'));
-    assertEq(d.notes.length, 0, '变量齐全时不应有缺项提示');
-  });
-
-  await t('必填变量缺失时 /check 返回 500 并点名', async () => {
-    const mod = await import('../src/index.js');
-    const bare = { BOT_CORE: env.BOT_CORE };
-    const res = await mod.default.fetch(new Request('http://bot.test/check'), bare, ctx);
-    assertEq(res.status, 500);
-    const d = await res.json();
-    assert(d.notes.join(' ').includes('LLM_API_KEY'), '应点名缺 LLM_API_KEY');
-  });
-
-  console.log('\n=== 2. 回调安全 ===');
-  await t('op=13 回调验证:signature 可被官方公钥验签', async () => {
-    const r = await postWebhook({ op: 13, d: { plain_token: 'Arq0D5A61EgUu4OxUvOp', event_ts: '1725442341' } });
-    assertEq(r.status, 200);
-    assertEq(r.json.plain_token, 'Arq0D5A61EgUu4OxUvOp');
-    assert(/^[0-9a-f]{128}$/.test(r.json.signature), '应为 128 位 hex');
-    const { publicKey } = await keysFromSecret(APP_SECRET);
-    const ok = await crypto.subtle.verify(
-      { name: 'Ed25519' }, publicKey,
-      Buffer.from(r.json.signature, 'hex'),
-      utf8('1725442341Arq0D5A61EgUu4OxUvOp'),
-    );
-    assert(ok, '验签应通过');
-  });
-
-  await t('无签名头 -> 401', async () => {
-    const r = await postWebhook(groupEvent('/帮助'), { signIt: false });
-    assertEq(r.status, 401);
-  });
-
-  await t('body 被篡改 -> 401', async () => {
-    const original = JSON.stringify(groupEvent('/帮助'));
-    const ts = String(Math.floor(Date.now() / 1000));
-    const sig = await signBody(ts, original);          // 对原始 body 签名
-    const tampered = original.replace('/帮助', '/删库跑路'); // 但发送篡改后的 body
-    const res = await req('/qq/webhook', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Signature-Ed25519': sig,
-        'X-Signature-Timestamp': ts,
-      },
-      body: tampered,
+// ---------------- 假上游:QQ 开放平台 + 大模型 ----------------
+const calls = { token: 0, messages: [], llm: [] };
+async function startUpstream() {
+  const { server, port } = await listen((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const send = (o, s = 200) => {
+        res.writeHead(s, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(o));
+      };
+      if (req.url.includes('getAppAccessToken')) {
+        calls.token++;
+        return send({ access_token: 'TOKEN_TEST', expires_in: 7200 });
+      }
+      if (/^\/v2\/(groups|users)\/.+\/messages/.test(req.url)) {
+        calls.messages.push({ url: req.url, body: JSON.parse(body || '{}'), auth: req.headers.authorization });
+        return send({ id: `SENT_${calls.messages.length}`, timestamp: Date.now() });
+      }
+      if (req.url.includes('/chat/completions')) {
+        calls.llm.push(JSON.parse(body || '{}'));
+        return send({
+          id: 'chatcmpl-test',
+          object: 'chat.completion',
+          choices: [{ index: 0, message: { role: 'assistant', content: '收到啦,我是测试机器人。' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        });
+      }
+      if (req.url.includes('/models')) {
+        return send({ data: [{ id: 'test-model-a' }, { id: 'test-model-b' }] });
+      }
+      if (req.url.includes('/websocket')) return send({ message: 'mock 不支持 WebSocket' }, 404);
+      send({ message: 'not found' }, 404);
     });
-    assertEq(res.status, 401);
   });
-
-  await t('事件去重:同一条推送发两次只处理一次', async () => {
-    const ev = groupEvent('/状态');
-    const before = mock.calls.qqSend.length;
-    await postWebhook(ev);
-    await waitFor(() => mock.calls.qqSend.length > before, 15000, '第一次处理');
-    await sleep(1200);
-    const mid = mock.calls.qqSend.length;
-    assert(mid > before, '第一次应该回了消息');
-    await postWebhook(ev); // 同 event id 再发一次
-    await sleep(1500);
-    assertEq(mock.calls.qqSend.length, mid, '重复事件不应再回消息');
-  });
-
-  console.log('\n=== 3. 命令 ===');
-  await t('@机器人发 /帮助 返回指令列表', async () => {
-    const { text } = await say('/帮助');
-    for (const k of ['/AI', '/压缩', '/delete', '/状态']) assert(text.includes(k), `帮助里缺少 ${k}`);
-  });
-
-  await t('@机器人但内容为空 -> 帮助', async () => {
-    const { text } = await say('');
-    assert(text.includes('/压缩') || text.includes('NB-AI'), '应返回帮助');
-  });
-
-  await t('/状态 返回运行信息', async () => {
-    const { text } = await say('/状态');
-    assert(text.includes('在线部署'), `状态内容不对: ${text.slice(0, 200)}`);
-    assert(text.includes('deepseek-v4.1-flash'));
-  });
-
-  await t('联网搜索工具走配置的服务商', async () => {
-    const core = env.BOT_CORE.core('core');
-    const out = await executeTool('web_search', { query: '测试', count: 2 }, { cfg: core.cfg, core, convId: 'test' });
-    assert(out.includes('example.com/one'), `应包含假搜索结果: ${out}`);
-    assert(out.includes('搜索结果一'), out);
-  });
-
-  await t('先回执、再用主动消息投递结果', async () => {
-    mock.plainNext();
-    const before = mock.calls.qqSend.length;
-    await say('你好呀');
-    const sent = mock.calls.qqSend.slice(before);
-    assert(sent.length >= 2, `应至少两条:回执 + 结果,实际 ${sent.length}`);
-    assert(sent[0].body.content.includes('Agent 正在运行'), `第一条应是回执: ${sent[0].body.content}`);
-    assert(sent[0].body.msg_id, '回执应该是被动回复(带 msg_id)');
-    const last = sent[sent.length - 1];
-    assert(!last.body.msg_id, '结果应该用主动消息发送(不带 msg_id)');
-  });
-
-  await t('被动回复发不出去时自动改用主动消息', async () => {
-    mock.rejectPassiveOnce();
-    mock.plainNext();
-    const before = mock.calls.qqSend.length;
-    await say('试试被动失败');
-    const sent = mock.calls.qqSend.slice(before);
-    const retriedActive = sent.some((s) => !s.body.msg_id && String(s.body.content).includes('Agent 正在运行'));
-    assert(retriedActive, `被动失败后应改用主动消息重发回执: ${JSON.stringify(sent.map((s) => s.body).slice(0, 3)).slice(0, 300)}`);
-  });
-
-  await t('主动消息没权限时自动退回被动回复', async () => {
-    mock.rejectActiveOnce();
-    mock.plainNext();
-    const before = mock.calls.qqSend.length;
-    await say('再说一句');
-    const sent = mock.calls.qqSend.slice(before);
-    const last = sent[sent.length - 1];
-    assert(last.body.msg_id, `主动失败后应退回被动回复: ${JSON.stringify(last.body).slice(0, 160)}`);
-    assert(!String(last.body.content).includes('处理这条消息时出错了'), '不应该把错误抛给用户');
-  });
-
-  await t('群记忆:记住 / 回忆 / 忘掉', async () => {
-    const core = env.BOT_CORE.core('core');
-    const ctx2 = { cfg: core.cfg, core, convId: 'g:MEM_TEST' };
-    const save = await executeTool('remember', { key: '开黑时间', value: '每周五晚八点' }, ctx2);
-    assert(save.includes('记住了'), save);
-    assert(core.memList('g:MEM_TEST').length === 1);
-    const list = await executeTool('recall', {}, ctx2);
-    assert(list.includes('每周五晚八点'), list);
-    const del = await executeTool('forget', { key: '开黑时间' }, ctx2);
-    assert(del.includes('已经忘掉'), del);
-    assert(core.memList('g:MEM_TEST').length === 0);
-    assert((await executeTool('forget', { key: '不存在' }, ctx2)).includes('没有找到'));
-  });
-
-  await t('群记忆会作为背景注入模型请求', async () => {
-    const core = env.BOT_CORE.core('core');
-    core.memSet('g:GROUP_TEST_1', '群主', '小明');
-    mock.plainNext();
-    const before = mock.calls.llmBodies.length;
-    await say('随便聊两句');
-    const body = mock.calls.llmBodies.slice(before).find((b) => Array.isArray(b.tools) && b.tools.length);
-    assert(body, '应该发出过带工具的请求');
-    assert(body.messages.some((m) => m.role === 'system' && String(m.content).includes('小明')),
-      '记忆应该出现在系统消息里');
-  });
-
-  await t('中转站用量查询', async () => {
-    const core = env.BOT_CORE.core('core');
-    const out = await executeTool('query_dashboard', {}, { cfg: { ...core.cfg, dashboardUrl: `${MOCK}/dashboard` }, core, convId: 'x' });
-    assert(out.includes('累计请求'), out);
-    assert(out.includes('deepseek-v4.1-flash'), out);
-  });
-
-  await t('随机与编解码工具', async () => {
-    const one = await executeTool('random', { min: 7, max: 7 }, {});
-    assert(one.includes('7'), one);
-    const pick = await executeTool('random', { choices: ['甲'] }, {});
-    assert(pick.includes('甲'), pick);
-    const enc = await executeTool('encode', { action: 'base64_encode', text: '你好' }, {});
-    assert(enc === '5L2g5aW9', enc);
-    assert((await executeTool('encode', { action: 'base64_decode', text: enc }, {})) === '你好');
-    const pretty = await executeTool('encode', { action: 'json_pretty', text: '{"a":1}' }, {});
-    assert(pretty.includes('\n  "a"'), pretty);
-    assert((await executeTool('encode', { action: 'url_decode', text: '%E4%BD%A0' }, {})) === '你');
-    assert((await executeTool('encode', { action: '乱写', text: 'x' }, {})).includes('执行失败'));
-  });
-
-  console.log('\n=== 4. Agent 全链路 + 部署 ===');
-  let deployUrl = '';
-  await t('「做个网页」-> 模型调 deploy_site -> 群里收到链接', async () => {
-    const { sent, text } = await say('帮我做个测试网页');
-    const m = new RegExp(`${BASE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/[^\\s\\]]+`).exec(text);
-    assert(m, `回复里没有部署链接: ${text.slice(0, 300)}`);
-    deployUrl = m[0];
-    assert(sent.every((s) => s.path === '/v2/groups/GROUP_TEST_1/messages'), '消息应发到正确的群');
-    assert(sent[0].body.msg_id, '第一条回执应是被动回复');
-    assert(sent.every((s) => s.body.msg_type === 0), '应为文本消息');
-    const seqs = sent.filter((s) => s.body.msg_id).map((s) => s.body.msg_seq);
-    assertEq(new Set(seqs).size, seqs.length, `被动回复的 msg_seq 必须每次不同: ${seqs}`);
-  });
-
-  await t('第一次思考回复不包含思考过程', async () => {
-    const all = mock.calls.qqSend.map((s) => s.body.content).join('\n');
-    assert(!all.includes('reasoning_content'), '不应把原始 reasoning 字段发出去');
-    assert(!all.includes('用户要一个网页,我应该用 deploy_site'), '不应把思考内容发到群里');
-  });
-
-  await t('部署的网页可访问且内容正确', async () => {
-    const r = await req(deployUrl.replace(BASE, ''));
-    assertEq(r.status, 200);
-    const html = await r.text();
-    assert(html.includes('<h1>项目'), `页面内容不对: ${html.slice(0, 150)}`);
-    assertEq(r.headers.get('content-type'), 'text/html; charset=utf-8');
-    assert(r.headers.get('x-robots-tag').includes('noindex'));
-    assert(r.headers.get('cache-control').includes('no-store'));
-  });
-
-  await t('子路径 /index.html 也能访问', async () => {
-    const r = await req(`${deployUrl.replace(BASE, '')}/index.html`);
-    assertEq(r.status, 200);
-  });
-
-  await t('内置后端 ./__data 读写正常', async () => {
-    const p = `${deployUrl.replace(BASE, '')}/__data/score`;
-    assertEq((await req(p)).status, 404, '未写入的键应 404');
-    const w = await req(p, { method: 'POST', body: '{"hi":1}' });
-    assertEq(w.status, 200, await w.text());
-    assertEq(await (await req(p)).text(), '{"hi":1}');
-  });
-
-  await t('未知 ID 返回友好 404 页', async () => {
-    const r = await req('/zzzz9999');
-    assertEq(r.status, 404);
-    assert((await r.text()).includes('项目不在了'));
-  });
-
-  await t('能列出部署详情(含剩余秒数)', async () => {
-    const sites = env.BOT_CORE.core('core').listSites();
-    assertEq(sites.length, 1, `实际有 ${sites.length} 个`);
-    const left = Math.round((sites[0].expiresAt - Date.now()) / 1000);
-    assert(left > 500 && left <= 600, `剩余时间应在 600 秒内: ${left}`);
-    assertEq(sites[0].files.map((f) => f.path).join(','), 'index.html');
-  });
-
-  console.log('\n=== 5. 名额上限与淘汰 ===');
-  await t('连续部署到 7 个:总数卡在 6', async () => {
-    for (let i = 0; i < 6; i++) await say(`再做一个测试网页 ${i}`);
-    const n = env.BOT_CORE.core('core').listSites().length;
-    assertEq(n, 6, `站点数应被限制在 6,实际 ${n}`);
-  });
-
-  await t('淘汰的是「最久没改动」的那个,且会告知用户', async () => {
-    const firstUrl = deployUrl;
-    const { text } = await say('再做最后一个网页');
-    assert(text.includes('自动清理') || text.includes('最久'), `应提示淘汰: ${text.slice(0, 300)}`);
-    assertEq(env.BOT_CORE.core('core').listSites().length, 6);
-    assertEq((await req(firstUrl.replace(BASE, ''))).status, 404, '最早的那个应已失效');
-  });
-
-  await t('update_site 会重置倒计时', async () => {
-    // 直接操作 DO,验证「修改 -> expires_at 重置」
-    const core = env.BOT_CORE.core('core');
-    const list = core.listSites();
-    const target = list[0];
-    core.sql.exec('UPDATE sites SET updated_at = ?, expires_at = ? WHERE id = ?',
-      Date.now() - 500000, Date.now() + 1000, target.id);
-    const before = core.getSite(target.id);
-    assert(before.expiresAt - Date.now() < 2000, '构造:快过期了');
-    core.updateSite(target.id, { files: [{ path: 'index.html', content: '<h1>改过了</h1>' }] });
-    const after = core.getSite(target.id);
-    assert(after.expiresAt - Date.now() > 590000, '修改后应重新计时');
-    assertEq(after.files.length, 1, '同名文件应被覆盖而不是新增');
-  });
-
-  await t('过期部署会被自动清理', async () => {
-    const core = env.BOT_CORE.core('core');
-    const list = core.listSites();
-    const victim = list[0];
-    core.sql.exec('UPDATE sites SET expires_at = ? WHERE id = ?', Date.now() - 1000, victim.id);
-    core.purgeExpired();
-    assertEq(core.getSite(victim.id), null, '过期站点应被删除');
-  });
-
-  await t('delete_site 能删掉部署', async () => {
-    const core = env.BOT_CORE.core('core');
-    const id = core.listSites()[0].id;
-    assertEq(core.deleteSite(id), true);
-    assertEq(core.getSite(id), null);
-  });
-
-  console.log('\n=== 6. 上下文管理 ===');
-  await t('/delete 清空上下文', async () => {
-    await say('/delete');
-    const before = mock.calls.llmBodies.length;
-    await say('你好呀');
-    const body = mock.calls.llmBodies[before];
-    const nonSystem = body.messages.filter((m) => m.role !== 'system');
-    assertEq(nonSystem.length, 1, `清空后只应剩当前这一条: ${JSON.stringify(nonSystem.map((m) => m.role))}`);
-  });
-
-  await t('多轮对话会带上历史', async () => {
-    await say('记住我叫小明');
-    const before = mock.calls.llmBodies.length;
-    await say('我叫什么');
-    const body = mock.calls.llmBodies[before];
-    const joined = body.messages.map((m) => m.content).join('\n');
-    assert(joined.includes('记住我叫小明'), `历史没带上: ${joined.slice(0, 200)}`);
-  });
-
-  await t('/压缩 生成摘要并在后续请求里注入', async () => {
-    const before = mock.calls.llmBodies.length;
-    const { text } = await say('/压缩');
-    assert(text.includes('压缩'), `应回复压缩结果: ${text.slice(0, 200)}`);
-    const compressBody = mock.calls.llmBodies[before];
-    assert(compressBody.messages.some((m) => String(m.content).includes('压缩')), '压缩请求应带压缩提示词');
-    assert(!compressBody.tools, '压缩请求不应带工具');
-
-    const before2 = mock.calls.llmBodies.length;
-    await say('继续聊');
-    const after = mock.calls.llmBodies[before2];
-    const sysText = after.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n');
-    assert(sysText.includes('摘要'), `摘要没注入: ${sysText.slice(0, 300)}`);
-  });
-
-  await t('工具调用轮次带上了正确的 assistant/tool 消息', async () => {
-    const withTools = mock.calls.llmBodies.filter((b) => b.tools && b.messages.some((m) => m.role === 'tool'));
-    assert(withTools.length > 0, '应该有带工具结果的请求');
-    const b = withTools[0];
-    const asst = b.messages.find((m) => m.role === 'assistant' && m.tool_calls);
-    assert(asst, '应有带 tool_calls 的 assistant 消息');
-    const toolMsg = b.messages.find((m) => m.role === 'tool');
-    assert(toolMsg.tool_call_id, 'tool 消息必须带 tool_call_id');
-    assert(toolMsg.content.length > 0, 'tool 消息不能为空');
-  });
-
-  console.log('\n=== 7. 失败兜底 ===');
-  await t('模型 504 时机器人给用户提示而不是静默', async () => {
-    mock.breakOnce(3);
-    const before = mock.calls.qqSend.length;
-    await postWebhook(groupEvent('这次一定会失败'));
-    await waitFor(
-      () => mock.calls.qqSend.slice(before).some((s) => /出错|失败|报错/.test(String(s.body.content))),
-      30000,
-      '等待错误提示',
-    );
-    const msgs = mock.calls.qqSend.slice(before).map((s) => s.body.content).join('\n');
-    assert(/出错|失败|报错/.test(msgs), `应有提示: ${msgs.slice(0, 200)}`);
-  });
-
-  await t('模型返回空内容时也有兜底文案', async () => {
-    mock.emptyOnce();
-    const before = mock.calls.qqSend.length;
-    await postWebhook(groupEvent('空回复测试'));
-    await waitFor(() => mock.calls.qqSend.length >= before + 2, 30000, '等待兜底');
-    const msgs = mock.calls.qqSend.slice(before).map((s) => s.body.content).join('\n');
-    assert(msgs.length > 5, '不能什么都不发');
-  });
-
-  await t('出错后服务依然健康', async () => {
-    assertEq((await req('/health')).status, 200);
-  });
-
-  console.log('\n=== 8. 输出到 QQ 的形态 ===');
-  await t('长回复会被切成多条且每条不超长', async () => {
-    mock.longOnce('x'.repeat(3000));
-    const before = mock.calls.qqSend.length;
-    await postWebhook(groupEvent('来一段超长回复'));
-    await waitFor(() => mock.calls.qqSend.length >= before + 2, 30000, '等待长回复');
-    await sleep(800);
-    const sent = mock.calls.qqSend.slice(before);
-    assert(sent.length <= 6, `最多 6 条(含提示),实际 ${sent.length}`);
-    for (const s of sent) assert(s.body.content.length <= 900, `单条过长: ${s.body.content.length}`);
-  });
-
-  await t('QQ 报「不允许发送 URL」时自动降级重发', async () => {
-    mock.rejectUrlOnce();
-    const before = mock.calls.qqSend.length;
-    const r = await postWebhook(groupEvent('帮我做个带链接的网页'));
-    assertEq(r.status, 200);
-    const stripped = (s) => /bot\.test|ai\.example/.test(s.body.content) && !s.body.content.includes('http://');
-    await waitFor(
-      () => mock.calls.qqSend.slice(before).some(stripped),
-      30000,
-      '等待降级重发(去掉协议头的那一条)',
-    );
-    const sent = mock.calls.qqSend.slice(before);
-    assert(sent.some(stripped), '降级后应去掉协议头');
-  });
+  return { server, port };
 }
 
-main().then(async () => {
-  console.log(`\n${'='.repeat(64)}`);
-  if (fail === 0) console.log(`✅ 集成测试全部通过:${pass} 项`);
-  else {
-    console.log(`❌ 集成测试失败 ${fail} 项 / 共 ${pass + fail} 项`);
-    for (const f of failures) console.log(`   · ${f}`);
-  }
-  console.log('='.repeat(64));
-  try { alarmRunner?.stop(); } catch { /* ignore */ }
-  try { await mock?.close(); } catch { /* ignore */ }
-  process.exit(fail === 0 ? 0 : 1);
-}).catch(async (e) => {
-  console.error('集成测试自身崩了:', e);
-  try { alarmRunner?.stop(); await mock?.close(); } catch { /* ignore */ }
-  process.exit(1);
+// ---------------- 假 MCP 服务器 ----------------
+async function startMcp() {
+  const tools = [
+    { name: 'echo', description: '把输入原样返回', inputSchema: { type: 'object', properties: { text: { type: 'string' } } } },
+    { name: 'add', description: '两数相加', inputSchema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } } } },
+  ];
+  const { server, port } = await listen((req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      const msg = JSON.parse(body || '{}');
+      if (!msg.id) {
+        res.writeHead(202);
+        return res.end();
+      }
+      const reply = (result) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }));
+      };
+      if (msg.method === 'initialize') return reply({ protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'mock', version: '1' } });
+      if (msg.method === 'tools/list') return reply({ tools });
+      if (msg.method === 'tools/call') {
+        const a = msg.params?.arguments || {};
+        const text = msg.params?.name === 'add' ? String(Number(a.a) + Number(a.b)) : String(a.text ?? '');
+        return reply({ content: [{ type: 'text', text }] });
+      }
+      reply({});
+    });
+  });
+  return { server, port };
+}
+
+// ---------------- 启动 ----------------
+const up = await startUpstream();
+const mcpSrv = await startMcp();
+const env = makeEnv({
+  ADMIN_USER: 'admin',
+  ADMIN_PASS: 'pw-12345678',
+  QQ_API_BASE: `http://127.0.0.1:${up.port}`,
 });
+const ctx = makeCtx();
+const alarm = startAlarmRunner(env, { intervalMs: 15 });
+
+let cookie = '';
+async function call(path, { method = 'GET', body, headers = {}, useCookie = true } = {}) {
+  const init = { method, headers: { 'CF-Connecting-IP': '10.0.0.1', ...headers } };
+  if (body !== undefined) {
+    init.body = typeof body === 'string' ? body : JSON.stringify(body);
+    init.headers['Content-Type'] = init.headers['Content-Type'] || 'application/json';
+  }
+  if (useCookie && cookie) init.headers.Cookie = cookie;
+  const res = await worker.fetch(new Request(`https://panel.example.com${path}`, init), env, ctx);
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    /* 非 JSON */
+  }
+  return { status: res.status, text, json, headers: res.headers };
+}
+async function api(path, opt) {
+  return await call(`/administrator/api${path}`, opt);
+}
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+console.log('\n【面板与鉴权】');
+await t('未登录访问接口返回 401', async () => {
+  const r = await call('/administrator/api/overview', { useCookie: false });
+  assert(r.status === 401, `实际 ${r.status}`);
+});
+await t('登录页可访问且不含敏感信息', async () => {
+  const r = await call('/administrator', { useCookie: false });
+  assert(r.status === 200, `实际 ${r.status}`);
+  assert(r.text.includes('请登录'), '应显示登录表单');
+  assert(!r.text.includes('pw-12345678'), '登录页不能泄露密码');
+});
+await t('错误密码被拒并计数', async () => {
+  const r = await api('/login', { method: 'POST', body: { user: 'admin', pass: 'wrong-pass' }, useCookie: false });
+  assert(r.status === 401, `实际 ${r.status}`);
+  assert(/还剩/.test(r.json.error), r.json.error);
+});
+await t('正确密码登录成功并下发 Cookie', async () => {
+  const r = await api('/login', { method: 'POST', body: { user: 'admin', pass: 'pw-12345678' }, useCookie: false });
+  assert(r.status === 200 && r.json.ok, JSON.stringify(r.json));
+  const setCookie = r.headers.get('Set-Cookie') || '';
+  assert(setCookie.includes('HttpOnly'), 'Cookie 应带 HttpOnly');
+  cookie = setCookie.split(';')[0];
+});
+await t('登录后可以访问面板页', async () => {
+  const r = await call('/administrator');
+  assert(r.status === 200 && r.text.includes('管理面板'), `实际 ${r.status}`);
+});
+await t('伪造 Cookie 无效', async () => {
+  const bad = cookie.replace(/.$/, 'x');
+  const res = await worker.fetch(new Request('https://panel.example.com/administrator/api/overview', {
+    headers: { Cookie: bad },
+  }), env, ctx);
+  assert(res.status === 401, `实际 ${res.status}`);
+});
+
+console.log('\n【设置】');
+await t('读取设置:默认连接方式为 WebSocket', async () => {
+  const r = await api('/settings');
+  assert(r.status === 200, `实际 ${r.status}`);
+  assert(r.json.settings.qq.mode === 'websocket', r.json.settings.qq.mode);
+  assert(r.json.callbackUrl.endsWith('/qq/webhook'), r.json.callbackUrl);
+});
+await t('保存 AI 接口与 QQ 凭据', async () => {
+  const r = await api('/settings', {
+    method: 'POST',
+    body: {
+      llm: { baseUrl: `http://127.0.0.1:${up.port}/v1`, apiKey: 'sk-test-1234567890', model: 'test-model-a' },
+      qq: { mode: 'webhook', appId: '100000001', appSecret: 'test-app-secret-not-real' },
+    },
+  });
+  assert(r.status === 200, JSON.stringify(r.json));
+});
+await t('密钥回读时被掩码', async () => {
+  const r = await api('/settings');
+  const k = r.json.settings.llm.apiKey;
+  assert(k.includes('****'), k);
+  assert(!k.includes('1234567890'), '掩码不应泄露完整 key');
+});
+await t('保存掩码值不会覆盖真实密钥', async () => {
+  const cur = await api('/settings');
+  await api('/settings', { method: 'POST', body: { llm: { apiKey: cur.json.settings.llm.apiKey } } });
+  const r = await api('/settings');
+  assert(r.json.settings.llm.apiKey.includes('sk-t'), r.json.settings.llm.apiKey);
+});
+await t('获取模型列表', async () => {
+  const r = await api('/models', { method: 'POST', body: { baseUrl: `http://127.0.0.1:${up.port}/v1`, apiKey: 'sk-x' } });
+  assert(r.status === 200 && r.json.models.length === 2, JSON.stringify(r.json));
+});
+await t('测试模型:对话与工具调用两项都跑', async () => {
+  const r = await api('/test-llm', { method: 'POST', body: { baseUrl: `http://127.0.0.1:${up.port}/v1`, apiKey: 'sk-x', model: 'test-model-a' } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(r.json.chat && r.json.chat.ok, JSON.stringify(r.json.chat));
+  assert(r.json.tool && typeof r.json.tool.ok === 'boolean', '应有工具调用结论');
+});
+
+console.log('\n【部署项目】');
+let pid = '';
+await t('面板部署一个项目', async () => {
+  const r = await api('/projects', {
+    method: 'POST',
+    body: {
+      name: '测试小游戏',
+      description: '集成测试用',
+      ttlMinutes: 10,
+      files: [
+        { path: 'index.html', content: '<!DOCTYPE html><html><body><h1>hello</h1><script src="app.js"></script></body></html>' },
+        { path: 'app.js', content: 'console.log("hi");'.repeat(50) },
+        { path: 'style.css', content: 'body{color:red}' },
+      ],
+    },
+  });
+  assert(r.status === 200 && r.json.id, JSON.stringify(r.json));
+  pid = r.json.id;
+  assert(/^[a-z0-9]{8}$/.test(pid), `ID 应为 8 位:${pid}`);
+});
+await t('访问部署好的页面', async () => {
+  const r = await call(`/${pid}`);
+  assert(r.status === 200, `实际 ${r.status}`);
+  assert(r.text.includes('hello'), r.text.slice(0, 80));
+  assert(r.headers.get('Content-Type').includes('text/html'), r.headers.get('Content-Type'));
+});
+await t('访问子文件与正确的 MIME', async () => {
+  const css = await call(`/${pid}/style.css`);
+  assert(css.status === 200 && css.text.includes('color:red'), css.text);
+  assert(css.headers.get('Content-Type').includes('text/css'), css.headers.get('Content-Type'));
+});
+await t('不存在的文件返回 404 页面', async () => {
+  const r = await call(`/${pid}/nope.js`);
+  assert(r.status === 404, `实际 ${r.status}`);
+});
+await t('不存在的项目返回 404', async () => {
+  const r = await call('/zzzz9999');
+  assert(r.status === 404, `实际 ${r.status}`);
+});
+await t('项目数据接口可读可写', async () => {
+  const w = await call(`/${pid}/__data/score`, { method: 'POST', body: '42' });
+  assert(w.status === 200 && w.json.ok, JSON.stringify(w.json));
+  const r = await call(`/${pid}/__data/score`);
+  assert(r.json.value === '42', JSON.stringify(r.json));
+});
+await t('项目详情含文件与占用', async () => {
+  const r = await api(`/projects/${pid}`);
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(r.json.files.length === 3, `文件数 ${r.json.files.length}`);
+  assert(r.json.usage.bytes > 0, '应统计占用');
+  assert(r.json.quota.limit >= r.json.quota.base, '额度应不小于保底');
+});
+await t('JS 文件被压缩存储', async () => {
+  const r = await api(`/projects/${pid}`);
+  const js = r.json.files.find((f) => f.path === 'app.js');
+  assert(js.gz === true, '重复内容应被 gzip 压小');
+  assert(js.size < js.rawSize, `${js.size} vs ${js.rawSize}`);
+});
+await t('查看文件内容(接口)', async () => {
+  const r = await api(`/projects/${pid}/file?path=style.css`);
+  assert(r.json.kind === 'text' && r.json.data.includes('color:red'), JSON.stringify(r.json).slice(0, 120));
+});
+await t('延续有效期', async () => {
+  const before = (await api(`/projects/${pid}`)).json.project.expiresAt;
+  await sleep(1100);
+  const r = await api(`/projects/${pid}/extend`, { method: 'POST', body: { seconds: 600 } });
+  assert(r.status === 200 && r.json.expiresAt > before, JSON.stringify(r.json));
+});
+await t('超出数量上限会被拒绝', async () => {
+  for (let i = 0; i < 4; i++) {
+    const r = await api('/projects', { method: 'POST', body: { name: `占位 ${i}`, ttlMinutes: 10, files: [{ path: 'index.html', content: `<h1>${i}</h1>` }] } });
+    assert(r.status === 200, `第 ${i} 个部署失败:${JSON.stringify(r.json)}`);
+  }
+  const over = await api('/projects', { method: 'POST', body: { name: '第六个', ttlMinutes: 10, files: [{ path: 'index.html', content: 'x' }] } });
+  assert(over.status === 400, `实际 ${over.status}`);
+  assert(/上限/.test(over.json.error), over.json.error);
+});
+await t('删除项目会连 KV 数据一起清掉', async () => {
+  const r = await api(`/projects/${pid}`, { method: 'DELETE' });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const gone = await call(`/${pid}`);
+  assert(gone.status === 404, `删除后仍可访问:${gone.status}`);
+  const keys = [...env.STORE.map.keys()].filter((k) => k.startsWith(`f/${pid}/`));
+  assert(keys.length === 0, `KV 还有残留:${keys.join(',')}`);
+  const r2 = await api(`/projects/${pid}`);
+  assert(r2.status === 404, '详情应 404');
+});
+
+await t('每日部署上限生效', async () => {
+  await api('/settings', { method: 'POST', body: { deploy: { maxPerDay: 1 } } });
+  const r = await api('/projects', { method: 'POST', body: { name: '再来一个', ttlMinutes: 10, files: [{ path: 'index.html', content: 'x' }] } });
+  assert(r.status === 400, `实际 ${r.status}`);
+  assert(/上限/.test(r.json.error), r.json.error);
+  await api('/settings', { method: 'POST', body: { deploy: { maxPerDay: 50 } } });
+});
+
+console.log('\n【WebHook 与消息链路】');
+await t('开启「允许所有群聊」', async () => {
+  const r = await api('/settings', { method: 'POST', body: { groups: { allowAll: true } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const cur = await api('/settings');
+  assert(cur.json.settings.groups.allowAll === true, '开关没保存');
+});
+await t('WebSocket 模式下回调地址被禁用', async () => {
+  await api('/settings', { method: 'POST', body: { qq: { mode: 'websocket' } } });
+  const r = await call('/qq/webhook', { method: 'POST', body: '{}', useCookie: false });
+  assert(r.status === 403, `实际 ${r.status}`);
+});
+await t('切回 WebHook 模式', async () => {
+  const r = await api('/settings', { method: 'POST', body: { qq: { mode: 'webhook' } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+});
+await t('op=13 回调验证返回可验签的 signature', async () => {
+  const payload = { op: 13, d: { plain_token: 'pt_test_123', event_ts: '1728000000' } };
+  const r = await call('/qq/webhook', { method: 'POST', body: payload, useCookie: false });
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(r.json.plain_token === 'pt_test_123', '应回显 plain_token');
+  assert(/^[0-9a-f]{128}$/.test(r.json.signature), `签名格式不对:${r.json.signature}`);
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const data = concatBytes(utf8('1728000000'), utf8('pt_test_123'));
+  const okSig = await crypto.subtle.verify({ name: 'Ed25519' }, keys.publicKey, hexBytes(r.json.signature), data);
+  assert(okSig, '签名验不过');
+});
+await t('未签名的消息事件被拒绝', async () => {
+  const r = await call('/qq/webhook', { method: 'POST', body: { op: 0, t: 'GROUP_AT_MESSAGE_CREATE', d: {} }, useCookie: false });
+  assert(r.status === 401, `实际 ${r.status}`);
+});
+await t('群消息走通全链路并回复到群里', async () => {
+  const before = calls.messages.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}`,
+    op: 0,
+    s: 1,
+    t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id: 'MSG_TEST_1', content: '你好', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  const r = await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  assert(r.status === 200, `实际 ${r.status} ${r.text.slice(0, 120)}`);
+
+  for (let i = 0; i < 200 && calls.messages.length < before + 2; i++) await sleep(50);
+  assert(calls.messages.length >= before + 2, `只发了 ${calls.messages.length - before} 条`);
+  const receipt = calls.messages[before];
+  const answer = calls.messages[before + 1];
+  assert(receipt.body.content.includes('Agent 正在运行'), receipt.body.content);
+  assert(receipt.body.msg_id === 'MSG_TEST_1', '回执应是被动回复');
+  assert(answer.body.content.includes('测试机器人'), answer.body.content);
+  assert(!answer.body.msg_id, '结果应走主动消息');
+  assert(answer.url.includes('GROUP_TEST_1'), answer.url);
+  assert(calls.token >= 1, '应取过 access token');
+});
+await t('关闭开关后,名单内的群仍可用', async () => {
+  await api('/settings', { method: 'POST', body: { groups: { allowAll: false } } });
+  const cur = await api('/settings');
+  const listed = cur.json.settings.groups.list.some((g) => g.openid === 'GROUP_TEST_1');
+  assert(listed, '发过消息的群应被自动收录:' + JSON.stringify(cur.json.settings.groups.list));
+  const before = calls.messages.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_listed`, op: 0, s: 9, t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id: 'MSG_TEST_9', content: '还在吗', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  for (let i = 0; i < 200 && calls.messages.length < before + 2; i++) await sleep(50);
+  assert(calls.messages.length >= before + 2, `名单内的群应能收到回复,实际 ${calls.messages.length - before} 条`);
+});
+await t('群白名单:未授权群被忽略', async () => {
+  const before = calls.messages.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_2`, op: 0, s: 2, t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id: 'MSG_TEST_2', content: '你好', group_openid: 'GROUP_OTHER', author: { member_openid: 'USER_X', nickname: '路人' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  await sleep(600);
+  assert(calls.messages.length === before, '白名单外的群不该收到回复');
+});
+await t('查信息指令返回 openID', async () => {
+  const before = calls.messages.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_3`, op: 0, s: 3, t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id: 'MSG_TEST_3', content: '/查信息', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  for (let i = 0; i < 100 && calls.messages.length < before + 1; i++) await sleep(50);
+  const msg = calls.messages[calls.messages.length - 1];
+  assert(msg.body.content.includes('USER_TEST_1'), msg.body.content);
+  assert(msg.body.content.includes('GROUP_TEST_1'), msg.body.content);
+});
+
+console.log('\n【MCP】');
+let mcpId = '';
+await t('添加 MCP 服务器并自动连接', async () => {
+  const r = await api('/mcp', { method: 'POST', body: { name: '测试服务器', url: `http://127.0.0.1:${mcpSrv.port}/mcp`, transport: 'http' } });
+  assert(r.status === 200 && r.json.id, JSON.stringify(r.json));
+  mcpId = r.json.id;
+  const list = await api('/mcp');
+  const s = list.json.servers.find((x) => x.id === mcpId);
+  assert(s.tools.list.length === 2, `工具数 ${s.tools.list.length}`);
+  assert(s.tools.enabled.length === 2, '默认全部启用');
+});
+await t('可以停用单个工具', async () => {
+  await api(`/mcp/${mcpId}`, { method: 'POST', body: { tool: 'add', on: false } });
+  const list = await api('/mcp');
+  const s = list.json.servers.find((x) => x.id === mcpId);
+  assert(!s.tools.enabled.includes('add'), JSON.stringify(s.tools.enabled));
+  await api(`/mcp/${mcpId}`, { method: 'POST', body: { tool: 'add', on: true } });
+});
+await t('可以整体停用服务器', async () => {
+  await api(`/mcp/${mcpId}`, { method: 'POST', body: { enabled: false } });
+  const list = await api('/mcp');
+  assert(!list.json.servers.find((x) => x.id === mcpId).enabled, '应已停用');
+  await api(`/mcp/${mcpId}`, { method: 'POST', body: { enabled: true } });
+});
+await t('重新测试连接', async () => {
+  const r = await api(`/mcp/${mcpId}/test`, { method: 'POST' });
+  assert(r.status === 200 && r.json.count === 2, JSON.stringify(r.json));
+});
+await t('删除 MCP 服务器', async () => {
+  const r = await api(`/mcp/${mcpId}`, { method: 'DELETE' });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const list = await api('/mcp');
+  assert(!list.json.servers.some((x) => x.id === mcpId), '应已删除');
+});
+
+console.log('\n【日志与统计】');
+await t('日志里有记录', async () => {
+  const r = await api('/logs?limit=50');
+  assert(r.status === 200 && r.json.logs.length > 0, `日志 ${r.json.logs.length} 条`);
+  assert(r.json.logs.some((l) => l.msg.includes('收到')), '应有消息记录');
+});
+await t('日志可以下载', async () => {
+  const r = await call('/administrator/api/logs/download');
+  assert(r.status === 200 && r.text.includes('['), r.text.slice(0, 60));
+});
+await t('日志可以清空', async () => {
+  await api('/logs', { method: 'DELETE' });
+  const r = await api('/logs');
+  assert(r.json.logs.length === 0, `还有 ${r.json.logs.length} 条`);
+});
+await t('概览统计有数据', async () => {
+  const r = await api('/overview');
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(r.json.totals.messages >= 3, `消息数 ${r.json.totals.messages}`);
+  assert(r.json.totals.visits >= 1, `访问数 ${r.json.totals.visits}`);
+  assert(r.json.totals.projects >= 1, `部署数 ${r.json.totals.projects}`);
+  assert(r.json.groups.some((g) => g.openid === 'GROUP_TEST_1'), '群列表应有测试群');
+});
+
+console.log('\n【安全:旧接口已下线】');
+for (const p of ['/health', '/healthz', '/check']) {
+  await t(`${p} 不再暴露`, async () => {
+    const r = await call(p, { useCookie: false });
+    assert(r.status === 404, `实际 ${r.status}`);
+  });
+}
+await t('绕过路径也拿不到健康信息', async () => {
+  const r = await call('/administrator/api/../health', { useCookie: false });
+  assert(!r.text.includes('"ok":true'), '不应返回健康检查 JSON');
+});
+await t('面板需要登录才能读项目列表', async () => {
+  const r = await call('/administrator/api/projects', { useCookie: false });
+  assert(r.status === 401, `实际 ${r.status}`);
+});
+
+alarm.stop();
+up.server.close();
+mcpSrv.server.close();
+await ctx.drain().catch(() => null);
+
+console.log(`\n${'='.repeat(60)}`);
+if (fails.length) {
+  console.log(`❌ 集成测试失败 ${fails.length} 项 / 共 ${pass + fails.length} 项`);
+  for (const f of fails) console.log(`   · ${f}`);
+  process.exit(1);
+}
+console.log(`✅ 集成测试全部通过:${pass} 项`);
+
+function hexBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}

@@ -3,12 +3,19 @@ import { buildTools } from './tools.js';
 import { executeTool } from './exec.js';
 import { buildSystemPrompt } from './prompt.js';
 import { truncate } from '../util/text.js';
+import { mcpToolDefs, callMcp } from './mcp.js';
 
 const TOTAL_BUDGET_MS = 4 * 60 * 1000;
 
 export async function runAgent({ cfg, core, convId, userText, meta = {}, log = console.log }) {
   const started = Date.now();
-  const tools = buildTools(cfg);
+  let mcp = { defs: [], map: new Map() };
+  try {
+    mcp = await mcpToolDefs(core.env);
+  } catch {
+    mcp = { defs: [], map: new Map() };
+  }
+  const tools = [...buildTools(cfg), ...mcp.defs];
   const ctx = { cfg, core, convId };
 
   const conv = await core.getContext(convId);
@@ -85,7 +92,8 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
         args = {};
       }
       const t0 = Date.now();
-      const result = await executeTool(name, args, ctx);
+      const m = mcp.map.get(name);
+      const result = m ? await callMcp(core.env, m.serverId, m.tool, args) : await executeTool(name, args, ctx);
       const ms = Date.now() - t0;
       toolTrace.push({ name, args, result: truncate(result, 500), ms });
       log(`[工具] ${name} ${JSON.stringify(args).slice(0, 200)} -> ${ms}ms :: ${String(result).replace(/\s+/g, ' ').slice(0, 300)}`);

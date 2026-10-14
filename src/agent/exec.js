@@ -5,7 +5,7 @@ import { webSearch } from './search.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
-const TOOL_LIST = 'calc, now, web_search, fetch_url, query_dashboard, deploy_site, update_site, list_sites, read_site, delete_site, remember, recall, forget, random, encode';
+const TOOL_LIST = 'calc, now, web_search, fetch_url, deploy_site, update_site, list_sites, read_site, delete_site, fs_write, fs_read, fs_list, fs_edit, fs_delete, fs_deploy, remember, recall, forget, random, encode';
 
 function fmtTime(d, offsetHours) {
   const t = new Date(d.getTime() + offsetHours * 3600_000);
@@ -157,32 +157,6 @@ export async function executeTool(name, args, ctx) {
       }
 
 
-      case 'query_dashboard': {
-        const res = await fetch(ctx.cfg.dashboardUrl, {
-          headers: { 'Authorization': `Bearer ${ctx.cfg.llmApiKey}`, 'User-Agent': UA },
-        });
-        if (!res.ok) return `查询中转站失败: HTTP ${res.status}`;
-        const d = await res.json();
-        const rt = d?.data?.realtime || {};
-        const recent = Array.isArray(d?.data?.recent) ? d.data.recent.slice(0, 5) : [];
-        const lines = [
-          '中转站实时数据:',
-          `  总额度: ${rt.all_quota ?? '?'}`,
-          `  累计请求: ${rt.all_requests ?? '?'}`,
-          `  累计 token: ${rt.all_tokens ?? '?'}`,
-          `  近 5 分钟: ${rt.last300_req ?? '?'} 次请求 / ${rt.last300_tokens ?? '?'} tokens`,
-          `  近 1 分钟: ${rt.last60_req ?? '?'} 次请求 / ${rt.last60_tokens ?? '?'} tokens`,
-          `  近 5 分钟活跃用户: ${rt.last300_active_users ?? '?'}`,
-        ];
-        if (recent.length) {
-          lines.push('最近调用:');
-          for (const r of recent) {
-            lines.push(`  #${r.id} ${r.model_name} ${r.tokens} tokens 用户 ${r.username}`);
-          }
-        }
-        return lines.join('\n');
-      }
-
       case 'remember': {
         const r = ctx.core.memSet(ctx.convId, a.key, a.value);
         if (r.error) return r.error;
@@ -217,15 +191,13 @@ export async function executeTool(name, args, ctx) {
         if (r.error) return r.error;
         return [
           '部署成功 ✅',
-          `项目名: ${r.site.name}`,
-          `链接: ${r.site.url}`,
-          `ID: ${r.site.id}`,
-          `文件: ${r.site.files.map((f) => f.path).join(', ')}`,
-          `存活: 从现在起 ${Math.round(ctx.cfg.siteTtlSeconds / 60)} 分钟,期间任何修改都会重新计时`,
-          `当前在线部署: ${r.count}/${ctx.cfg.maxSites}`,
-          r.evicted ? `⚠️ 已自动清理最久未改动的部署 ${r.evicted.id}(${r.evicted.name})以腾出名额` : '',
+          `项目名: ${r.name}`,
+          `链接: ${r.url}`,
+          `ID: ${r.id}`,
+          `文件: ${files.map((f) => f.path).join(', ')}`,
+          `存活: 从现在起 ${r.ttlMinutes} 分钟,期间任何修改都会重新计时`,
           '【重要】请把上面这个链接原样发在回复里,并简单说明怎么玩。',
-        ].filter(Boolean).join('\n');
+        ].join('\n');
       }
 
       case 'update_site': {
@@ -233,9 +205,9 @@ export async function executeTool(name, args, ctx) {
         const r = await ctx.core.updateSite(String(a.id || ''), { name: a.name, files });
         if (r.error) return r.error;
         return [
-          `修改成功 ✅ 链接不变: ${r.site.url}`,
-          `文件: ${r.site.files.map((f) => f.path).join(', ')}`,
-          `倒计时已重置为 ${Math.round(ctx.cfg.siteTtlSeconds / 60)} 分钟`,
+          `修改成功 ✅ 链接不变: ${r.url}`,
+          `文件: ${files.map((f) => f.path).join(', ')}`,
+          `倒计时已重置为 ${r.ttlMinutes} 分钟`,
           '【重要】请把链接原样告诉用户。',
         ].join('\n');
       }
@@ -243,34 +215,83 @@ export async function executeTool(name, args, ctx) {
       case 'list_sites': {
         const list = await ctx.core.listSites();
         if (!list.length) return '当前没有任何在线部署。';
-        const now = Date.now();
         return [
-          `当前在线部署 ${list.length}/${ctx.cfg.maxSites} 个:`,
-          ...list.map((s, i) => {
-            const left = Math.max(0, Math.round((s.expiresAt - now) / 1000));
-            return `${i + 1}. ${s.name} | ID=${s.id} | ${s.url} | 剩余 ${left} 秒 | 文件 ${s.files.map((f) => f.path).join(',')}`;
-          }),
+          `当前在线部署 ${list.length} 个:`,
+          ...list.map((s, i) => `${i + 1}. ${s.name} | ID=${s.id} | ${s.url} | 剩余 ${s.leftSeconds} 秒 | 访问 ${s.hits} 次 | 文件 ${s.files.join(',')}`),
         ].join('\n');
       }
 
       case 'read_site': {
         const r = await ctx.core.getSite(String(a.id || ''));
-        if (!r) return `没找到 ID 为 ${a.id} 的部署,先用 list_sites 看看有哪些。`;
+        if (r.error) return r.error;
         if (a.path) {
           const f = r.files.find((x) => x.path === a.path);
           if (!f) return `该部署里没有 ${a.path},现有文件:${r.files.map((x) => x.path).join(', ')}`;
           return `${a.path} 的内容:\n${truncate(f.content, 12000)}`;
         }
         return [
-          `${r.name}(${r.id}) ${r.url}`,
+          `${r.name}(${r.id}) ${r.url} · 剩余 ${r.leftSeconds} 秒`,
           '文件清单:',
-          ...r.files.map((f) => `--- ${f.path} (${f.content.length} 字) ---\n${truncate(f.content, 800)}`),
+          ...r.files.map((f) => `--- ${f.path} (${f.size} 字节) ---\n${truncate(f.content, 800)}`),
         ].join('\n');
       }
 
       case 'delete_site': {
         const ok = await ctx.core.deleteSite(String(a.id || ''));
-        return ok ? `已删除部署 ${a.id},链接已失效。` : `没找到 ID 为 ${a.id} 的部署。`;
+        return ok ? `已删除部署 ${a.id},链接已失效,它的存储空间也一并释放了。` : `没找到 ID 或名称为 ${a.id} 的部署。`;
+      }
+
+      case 'fs_write': {
+        const r = ctx.core.sandboxWrite(a.path, a.content);
+        if (r.error) return r.error;
+        return `已写入沙盒文件 ${r.path}(${r.size} 字节)。`;
+      }
+
+      case 'fs_read': {
+        const r = ctx.core.sandboxRead(String(a.path || ''));
+        if (r.error) return r.error;
+        return `${r.path} 的内容:\n${truncate(r.content, 12000)}`;
+      }
+
+      case 'fs_list': {
+        const list = ctx.core.sandboxList(String(a.path || ''));
+        if (!list.length) return '沙盒是空的。用 fs_write 写点东西进去吧。';
+        return ['沙盒里的文件:', ...list.map((f) => `· ${f.path} (${f.size} 字节)`)].join('\n');
+      }
+
+      case 'fs_edit': {
+        const r = ctx.core.sandboxEdit(String(a.path || ''), String(a.find ?? ''), String(a.replace ?? ''));
+        if (r.error) return r.error;
+        return `已修改 ${r.path},现在是 ${r.size} 字节。`;
+      }
+
+      case 'fs_delete': {
+        const r = ctx.core.sandboxDelete(String(a.path || ''));
+        return r.error ? r.error : `已删除沙盒文件 ${a.path}。`;
+      }
+
+      case 'fs_deploy': {
+        const list = ctx.core.sandboxList(String(a.dir || ''));
+        const want = Array.isArray(a.paths) && a.paths.length ? a.paths.map(String) : list.map((f) => f.path);
+        const files = [];
+        for (const path of want) {
+          const f = ctx.core.sandboxRead(path);
+          if (f.error) return `沙盒里没有 ${path}`;
+          files.push({ path, content: f.content });
+        }
+        if (!files.length) return '沙盒里没有可部署的文件,先用 fs_write 写一个 index.html。';
+        const norm = normaliseFiles(files, ctx.cfg);
+        const r = await ctx.core.createSite({ name: a.name, description: a.description, files: norm, owner: ctx.convId });
+        if (r.error) return r.error;
+        return [
+          '部署成功 ✅(来自沙盒)',
+          `项目名: ${r.name}`,
+          `链接: ${r.url}`,
+          `ID: ${r.id}`,
+          `文件: ${norm.map((f) => f.path).join(', ')}`,
+          `存活: ${r.ttlMinutes} 分钟`,
+          '【重要】请把链接原样发在回复里。',
+        ].join('\n');
       }
 
       default:
@@ -299,8 +320,11 @@ export function normaliseFiles(files, cfg) {
     }
     const content = String(f?.content ?? '');
     total += content.length;
-    if (total > cfg.maxSiteBytes) {
-      throw new Error(`代码总量超过上限 ${cfg.maxSiteBytes} 字节,请精简后再部署`);
+    if (content.length > (cfg.maxFileBytes || 900000)) {
+      throw new Error(`单个文件超过上限 ${Math.round((cfg.maxFileBytes || 900000) / 1024)} KB,请精简后再部署`);
+    }
+    if (total > 2 * 1024 * 1024) {
+      throw new Error('代码总量超过 2 MB,请精简后再部署');
     }
     const existing = out.find((x) => x.path === path);
     if (existing) existing.content = content;

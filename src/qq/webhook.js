@@ -128,7 +128,8 @@ export async function handleWebhook(request, cfg, env) {
         return jsonRes({ error: 'signature invalid' }, 401);
       }
     } catch (e) {
-      console.error('[验签异常,已放行]', e?.stack || e);
+      console.error('[验签异常]', e?.stack || e);
+      return jsonRes({ error: 'signature error' }, 401);
     }
   }
 

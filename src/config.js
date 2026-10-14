@@ -1,62 +1,137 @@
-const FIXED = {
-  apiBase: 'https://api.bot.qq.com',
-  tokenUrl: 'https://api.bot.qq.com/app/getAppAccessToken',
+export const FIXED = {
+  apiBase: 'https://api.sgroup.qq.com',
+  sandboxApiBase: 'https://sandbox.api.sgroup.qq.com',
+  tokenUrl: 'https://bots.qq.com/app/getAppAccessToken',
+  gatewayUrl: 'https://api.sgroup.qq.com/websocket/',
   webhookPath: '/qq/webhook',
-  llmModel: 'deepseek-v4.1-flash',
-  reasoningEffort: 'max',
-  fallbackEffort: 'low',
+  panelPath: '/administrator',
   llmTimeoutMs: 120000,
   agentMaxRounds: 6,
   agentMaxToolsPerRound: 4,
   agentBudgetMs: 240000,
-  maxSites: 6,
-  siteTtlSeconds: 600,
   idLen: 8,
   idCharset: 'ascii',
-  maxSiteBytes: 200000,
+  maxFileBytes: 900000,
   keepMessages: 12,
   compressChars: 6000,
   summaryChars: 2000,
   searchResults: 5,
-  dashboardUrl: 'https://manage.nexacode.dpdns.org/api/dashboard',
   answerDelivery: 'active',
+  sessionDays: 7,
+  loginMaxFails: 5,
+  loginLockMs: 15 * 60 * 1000,
 };
 
-export const REQUIRED_VARS = ['QQ_APP_ID', 'QQ_APP_SECRET', 'LLM_BASE_URL', 'LLM_API_KEY'];
+export const ENV_VARS = ['ADMIN_USER', 'ADMIN_PASS'];
 
-export const OPTIONAL_VARS = ['SEARCH_API_URL', 'SEARCH_API_KEY', 'PUBLIC_BASE_URL'];
+export const KV_TOTAL_BYTES = 1024 * 1024 * 1024;
 
-export const ALL_VARS = [...REQUIRED_VARS, ...OPTIONAL_VARS];
-
-export { FIXED };
+export const DEFAULT_SETTINGS = {
+  llm: {
+    baseUrl: '',
+    apiKey: '',
+    model: 'deepseek-v4.1-flash',
+    headers: {},
+    reasoningEffort: 'max',
+    deepThinking: true,
+    models: [],
+  },
+  search: { url: '', key: '', headers: {} },
+  qq: { appId: '', appSecret: '', mode: 'websocket', sandbox: false, intents: 33554432 },
+  persona: '',
+  admin: { openIds: [], groupAdmins: false },
+  groups: { allowAll: false, list: [] },
+  deploy: {
+    ttlSeconds: 600,
+    extendSeconds: 600,
+    maxProjects: 5,
+    perProjectBytes: 64 * 1024 * 1024,
+    reserveBytes: 64 * 1024 * 1024,
+    dataQuotaBytes: 256 * 1024,
+    writesPerDay: 200,
+    maxPerDay: 50,
+    allowData: true,
+  },
+  logs: { debug: false, retentionDays: 7, maxRows: 8000 },
+  site: { publicBaseUrl: '' },
+};
 
 function str(env, key) {
   const v = env?.[key];
   return v === undefined || v === null ? '' : String(v).trim();
 }
 
-function trimSlash(s) {
-  return String(s).replace(/\/+$/, '');
-}
-
-export function loadConfig(env = {}) {
+export function loadEnv(env = {}) {
   return {
-    appId: str(env, 'QQ_APP_ID'),
-    appSecret: str(env, 'QQ_APP_SECRET'),
-    llmBaseUrl: trimSlash(str(env, 'LLM_BASE_URL')),
-    llmApiKey: str(env, 'LLM_API_KEY'),
-    searchApiUrl: str(env, 'SEARCH_API_URL'),
-    searchApiKey: str(env, 'SEARCH_API_KEY'),
-    publicBaseUrl: trimSlash(str(env, 'PUBLIC_BASE_URL')),
-    ...FIXED,
+    adminUser: str(env, 'ADMIN_USER'),
+    adminPass: str(env, 'ADMIN_PASS'),
+    hasDB: !!env?.DB,
+    hasKV: !!env?.STORE,
+    hasCore: !!env?.BOT_CORE,
   };
 }
 
-export function missingVars(cfg) {
+export function missingEnv(env = {}) {
   const missing = [];
-  if (!cfg.appId) missing.push('QQ_APP_ID');
-  if (!cfg.appSecret) missing.push('QQ_APP_SECRET');
-  if (!cfg.llmBaseUrl) missing.push('LLM_BASE_URL');
-  if (!cfg.llmApiKey) missing.push('LLM_API_KEY');
+  if (!str(env, 'ADMIN_USER')) missing.push('ADMIN_USER');
+  if (!str(env, 'ADMIN_PASS')) missing.push('ADMIN_PASS');
   return missing;
+}
+
+export function deepMerge(base, patch) {
+  if (patch === null || patch === undefined) return base;
+  if (Array.isArray(base) || Array.isArray(patch)) return patch;
+  if (typeof base !== 'object' || typeof patch !== 'object') return patch;
+  const out = { ...base };
+  for (const [k, v] of Object.entries(patch)) {
+    out[k] = k in base ? deepMerge(base[k], v) : v;
+  }
+  return out;
+}
+
+export function trimSlash(s) {
+  return String(s || '').replace(/\/+$/, '');
+}
+
+export function flatten(settings, env = {}) {
+  const e = loadEnv(env);
+  const llm = settings.llm || {};
+  const qq = settings.qq || {};
+  const dep = settings.deploy || {};
+  const sandbox = qq.sandbox === true;
+  const override = env?.QQ_API_BASE ? String(env.QQ_API_BASE).replace(/\/+$/, '') : '';
+  const apiBase = override || (sandbox ? FIXED.sandboxApiBase : FIXED.apiBase);
+  const tokenUrl = override ? `${override}/app/getAppAccessToken` : FIXED.tokenUrl;
+  return {
+    ...FIXED,
+    apiBase,
+    tokenUrl,
+    gatewayUrl: `${apiBase}/websocket/`,
+    sandbox,
+    adminUser: e.adminUser,
+    adminPass: e.adminPass,
+    appId: String(qq.appId || '').trim(),
+    appSecret: String(qq.appSecret || '').trim(),
+    mode: qq.mode === 'webhook' ? 'webhook' : 'websocket',
+    intents: Number(qq.intents) || 33554432,
+    llmBaseUrl: trimSlash(llm.baseUrl),
+    llmApiKey: String(llm.apiKey || '').trim(),
+    llmModel: String(llm.model || 'deepseek-v4.1-flash').trim(),
+    llmHeaders: llm.headers && typeof llm.headers === 'object' ? llm.headers : {},
+    reasoningEffort: llm.deepThinking === false ? 'none' : (llm.reasoningEffort || 'max'),
+    deepThinking: llm.deepThinking !== false,
+    searchApiUrl: String(settings.search?.url || '').trim(),
+    searchApiKey: String(settings.search?.key || '').trim(),
+    searchHeaders: settings.search?.headers && typeof settings.search.headers === 'object' ? settings.search.headers : {},
+    persona: String(settings.persona || ''),
+    publicBaseUrl: trimSlash(settings.site?.publicBaseUrl),
+    maxSites: Number(dep.maxProjects) || 5,
+    siteTtlSeconds: Number(dep.ttlSeconds) || 600,
+    extendSeconds: Number(dep.extendSeconds) || 600,
+    perProjectBytes: Number(dep.perProjectBytes) || 64 * 1024 * 1024,
+    reserveBytes: Number(dep.reserveBytes) || 64 * 1024 * 1024,
+    dataQuotaBytes: Number(dep.dataQuotaBytes) || 256 * 1024,
+    allowData: dep.allowData !== false,
+    settings,
+  };
 }

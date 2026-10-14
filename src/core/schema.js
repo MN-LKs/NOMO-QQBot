@@ -5,18 +5,6 @@ export const SCHEMA = [
      exp INTEGER
    )`,
 
-  `CREATE TABLE IF NOT EXISTS sites (
-     id          TEXT PRIMARY KEY,
-     name        TEXT NOT NULL,
-     description TEXT,
-     owner       TEXT,
-     created_at  INTEGER NOT NULL,
-     updated_at  INTEGER NOT NULL,
-     expires_at  INTEGER NOT NULL,
-     files       TEXT NOT NULL
-   )`,
-  `CREATE INDEX IF NOT EXISTS idx_sites_updated ON sites(updated_at)`,
-
   `CREATE TABLE IF NOT EXISTS conv (
      id         TEXT PRIMARY KEY,
      summary    TEXT,
@@ -43,14 +31,6 @@ export const SCHEMA = [
    )`,
   `CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status, created_at)`,
 
-  `CREATE TABLE IF NOT EXISTS sdata (
-     site_id    TEXT NOT NULL,
-     k          TEXT NOT NULL,
-     v          TEXT NOT NULL,
-     updated_at INTEGER NOT NULL,
-     PRIMARY KEY (site_id, k)
-   )`,
-
   `CREATE TABLE IF NOT EXISTS mem (
      conv_id    TEXT NOT NULL,
      k          TEXT NOT NULL,
@@ -59,8 +39,9 @@ export const SCHEMA = [
      PRIMARY KEY (conv_id, k)
    )`,
 
-  `CREATE TABLE IF NOT EXISTS stats (
-     k TEXT PRIMARY KEY,
-     v INTEGER NOT NULL
+  `CREATE TABLE IF NOT EXISTS fs (
+     path       TEXT PRIMARY KEY,
+     content    TEXT NOT NULL,
+     updated_at INTEGER NOT NULL
    )`,
 ];
