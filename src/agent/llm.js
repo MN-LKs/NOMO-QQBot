@@ -71,7 +71,9 @@ export function isBlank(r) {
 
 export async function chatOnce(cfg, messages, tools, opts = {}) {
   const effort = opts.effort ?? cfg.reasoningEffort;
-  const timeoutMs = Math.max(5000, opts.timeoutMs ?? cfg.llmTimeoutMs);
+  // 0 表示不限制:一直等上游,直到它返回内容或者报错断开。
+  const rawTimeout = opts.timeoutMs ?? cfg.llmTimeoutMs;
+  const timeoutMs = Number(rawTimeout) > 0 ? Math.max(5000, Number(rawTimeout)) : 0;
   const started = Date.now();
 
   const body = { model: cfg.llmModel, messages, stream: false };
@@ -82,7 +84,8 @@ export async function chatOnce(cfg, messages, tools, opts = {}) {
   }
 
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(new Error('timeout')), timeoutMs);
+  let timer = null;
+  if (timeoutMs > 0) timer = setTimeout(() => ctrl.abort(new Error('timeout')), timeoutMs);
 
   try {
     const res = await fetch(`${cfg.llmBaseUrl}/chat/completions`, {
@@ -118,12 +121,13 @@ export async function chatOnce(cfg, messages, tools, opts = {}) {
     if (e?.name === 'AbortError' || /timeout/i.test(String(e?.message || ''))) {
       return {
         content: '', reasoningHead: '', reasoningLen: 0, toolCalls: [], finishReason: null,
-        usage: null, elapsedMs: Date.now() - started, aborted: true, error: `超时(${timeoutMs}ms)`,
+        usage: null, elapsedMs: Date.now() - started, aborted: true,
+        error: timeoutMs > 0 ? `超时(${timeoutMs}ms)` : '请求被取消',
       };
     }
     throw e;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 

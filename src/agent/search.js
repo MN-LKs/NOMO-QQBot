@@ -210,6 +210,6 @@ export async function webSearch(cfg, query, count) {
   }
 
   const lines = items.map((it, i) => `${i + 1}. ${it.title || '(无标题)'}\n   ${it.url}`
-    + (it.snippet ? `\n   ${truncate(it.snippet, 220)}` : ''));
+    + (it.snippet ? `\n   ${truncate(it.snippet, 400)}` : ''));
   return `搜索「${q}」(来源:${provider})\n${lines.join('\n')}`;
 }

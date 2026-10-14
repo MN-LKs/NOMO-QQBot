@@ -137,8 +137,8 @@ export function buildTools(cfg) {
       type: 'function',
       function: {
         name: 'query_dashboard',
-        description: '查询当前 AI 中转站的实时用量:总额度、累计请求数、token 数、最近调用记录。'
-          + '用户问「还剩多少额度」「中转站用量」时用。',
+        description: '查询当前 AI 中转站的实时用量:剩余额度、累计请求数、token 数、最近调用记录。'
+          + '用户问「还剩多少额度」「中转站用量」「今天用了多少」时用。',
         parameters: { type: 'object', properties: {} },
       },
     },

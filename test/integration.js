@@ -47,13 +47,55 @@ async function startUpstream() {
         return send({ id: `SENT_${calls.messages.length}`, timestamp: Date.now() });
       }
       if (req.url.includes('/chat/completions')) {
-        calls.llm.push(JSON.parse(body || '{}'));
+        const reqBody = JSON.parse(body || '{}');
+        calls.llm.push(reqBody);
+        const msgs = reqBody.messages || [];
+        const lastUser = [...msgs].reverse().find((m) => m.role === 'user');
+        const userText = typeof lastUser?.content === 'string' ? lastUser.content : '';
+        const hasToolResult = msgs.some((m) => m.role === 'tool');
+        const magic = [
+          ['TEST_TOOL_REMEMBER', 'remember', { key: '测试键', value: '测试值' }],
+          ['TEST_TOOL_DASHBOARD', 'query_dashboard', {}],
+          ['TEST_TOOL_FETCH', 'fetch_url', { url: 'https://example.com/article' }],
+          ['TEST_TOOL_LISTSITES', 'list_sites', {}],
+        ].find(([mark]) => userText.includes(mark));
+        if (magic && !hasToolResult) {
+          const [, name, args] = magic;
+          return send({
+            id: 'chatcmpl-tool',
+            object: 'chat.completion',
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                tool_calls: [{ id: `call_${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+              },
+              finish_reason: 'tool_calls',
+            }],
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          });
+        }
         return send({
           id: 'chatcmpl-test',
           object: 'chat.completion',
-          choices: [{ index: 0, message: { role: 'assistant', content: '收到啦,我是测试机器人。' }, finish_reason: 'stop' }],
+          choices: [{ index: 0, message: { role: 'assistant', content: magic ? `工具 ${magic[1]} 已完成,这是最终回复。` : '收到啦,我是测试机器人。' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
         });
+      }
+      if (req.url.includes('/api/dashboard')) {
+        return send({
+          code: 0,
+          data: {
+            realtime: { all_requests: 12345, all_tokens: 6789012345, now: Math.floor(Date.now() / 1000) },
+            windows: { today: { requests: 66, tokens: 1234567 } },
+            totals: { quota: 2000000 },
+            recent: [{ username: 'tester', model_name: 'test-model', tokens: 999, created_at: Math.floor(Date.now() / 1000) - 60 }],
+          },
+        });
+      }
+      if (req.url.includes('/extract')) {
+        return send({ content: '这是网页查询 API 提取到的正文内容,专门给测试用。' });
       }
       if (req.url.includes('/models')) {
         return send({ data: [{ id: 'test-model-a' }, { id: 'test-model-b' }] });
@@ -357,7 +399,8 @@ await t('群消息走通全链路并回复到群里', async () => {
   assert(receipt.body.content.includes('Agent 正在运行'), receipt.body.content);
   assert(receipt.body.msg_id === 'MSG_TEST_1', '回执应是被动回复');
   assert(answer.body.content.includes('测试机器人'), answer.body.content);
-  assert(!answer.body.msg_id, '结果应走主动消息');
+  assert(answer.body.msg_id === 'MSG_TEST_1', 'auto 模式:被动窗口内结果也应走被动回复');
+  assert(answer.body.msg_seq > receipt.body.msg_seq, 'msg_seq 应递增');
   assert(answer.url.includes('GROUP_TEST_1'), answer.url);
   assert(calls.token >= 1, '应取过 access token');
 });
@@ -405,6 +448,116 @@ await t('查信息指令返回 openID', async () => {
   const msg = calls.messages[calls.messages.length - 1];
   assert(msg.body.content.includes('USER_TEST_1'), msg.body.content);
   assert(msg.body.content.includes('GROUP_TEST_1'), msg.body.content);
+});
+
+console.log('\n【全量消息与 /AI 触发】');
+await t('全量群消息:非 /AI 开头完全不触发 AI', async () => {
+  const llmBefore = calls.llm.length;
+  const msgBefore = calls.messages.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_f1`, op: 0, s: 5, t: 'GROUP_MESSAGE_CREATE',
+    d: { id: 'MSG_FULL_1', content: '大家中午吃什么', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  await sleep(800);
+  assert(calls.llm.length === llmBefore, '普通群聊消息不该调用模型');
+  assert(calls.messages.length === msgBefore, '普通群聊消息不该收到任何回复');
+});
+await t('全量群消息:/AI 开头正常触发(回执+结果)', async () => {
+  const msgBefore = calls.messages.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_f2`, op: 0, s: 6, t: 'GROUP_MESSAGE_CREATE',
+    d: { id: 'MSG_FULL_2', content: '/AI 你好', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  for (let i = 0; i < 200 && calls.messages.length < msgBefore + 2; i++) await sleep(50);
+  assert(calls.messages.length >= msgBefore + 2, `应收到回执+结果,实际 ${calls.messages.length - msgBefore} 条`);
+  const receipt = calls.messages[msgBefore];
+  assert(receipt.body.msg_id === 'MSG_FULL_2', '回执应是被动回复');
+});
+await t('超窗消息跳过回执,结果用主动消息发回', async () => {
+  const before = calls.messages.length;
+  const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
+  await stub.fetch('https://do/enqueue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      eventId: `EV_OLD_${Date.now()}`, kind: 'message', scene: 'group', mentioned: true,
+      convId: 'g:GROUP_TEST_1', targetId: 'GROUP_TEST_1', messageId: 'MSG_OLD_1',
+      userId: 'USER_TEST_1', nickname: '小明', text: '你好',
+      ts: Date.now() - 10 * 60 * 1000,
+    }),
+  });
+  for (let i = 0; i < 200 && calls.messages.length < before + 1; i++) await sleep(50);
+  assert(calls.messages.length >= before + 1, '应发出结果');
+  const answer = calls.messages[before];
+  assert(!answer.body.msg_id, '超窗后应走主动消息');
+  assert(answer.body.content.includes('测试机器人'), answer.body.content);
+});
+
+console.log('\n【Agent 工具】');
+function resetDoCfg() {
+  const core = env.BOT_CORE.core('core');
+  if (core) { core._cfg = null; core._cfgAt = 0; }
+}
+async function sendGroupAt(content) {
+  const id = `MSG_TOOL_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id, op: 0, s: 9, t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id, content, group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+}
+async function toolResultFor(mark) {
+  const llmBefore = calls.llm.length;
+  const msgBefore = calls.messages.length;
+  await sendGroupAt(mark);
+  for (let i = 0; i < 300 && calls.messages.length < msgBefore + 2; i++) await sleep(50);
+  assert(calls.messages.length >= msgBefore + 2, `应收到回执+结果(实际 ${calls.messages.length - msgBefore} 条)`);
+  const toolMsgs = calls.llm.slice(llmBefore).flatMap((r) => (r.messages || []).filter((m) => m.role === 'tool'));
+  assert(toolMsgs.length >= 1, '模型应收到工具结果');
+  return toolMsgs.map((m) => String(m.content)).join('\n');
+}
+
+await t('工具 remember:回显带键值而不是 undefined', async () => {
+  const text = await toolResultFor('TEST_TOOL_REMEMBER');
+  assert(text.includes('记住了:测试键 → 测试值'), `实际:${text.slice(0, 200)}`);
+  assert(!text.includes('undefined'), '不应出现 undefined');
+});
+await t('工具 query_dashboard:返回中转站用量', async () => {
+  await api('/settings', { method: 'POST', body: { dashboard: { url: `http://127.0.0.1:${up.port}/api/dashboard` } } });
+  resetDoCfg();
+  const text = await toolResultFor('TEST_TOOL_DASHBOARD');
+  assert(text.includes('累计请求'), `实际:${text.slice(0, 300)}`);
+  assert(text.includes('1.2 万'), `应包含累计请求数,实际:${text.slice(0, 300)}`);
+  assert(text.includes('tester'), `应包含最近调用,实际:${text.slice(0, 300)}`);
+});
+await t('工具 fetch_url:优先走网页查询 API', async () => {
+  await api('/settings', { method: 'POST', body: { extract: { url: `http://127.0.0.1:${up.port}/extract`, format: 'json' } } });
+  resetDoCfg();
+  const text = await toolResultFor('TEST_TOOL_FETCH');
+  assert(text.includes('经网页查询 API'), `实际:${text.slice(0, 300)}`);
+  assert(text.includes('提取到的正文'), `实际:${text.slice(0, 300)}`);
+});
+await t('工具 list_sites:项目到期销毁后会解释原因', async () => {
+  // 让现有项目全部立即过期,再部署一个"短命项目"也过期,等自动清理写日志
+  await env.DB.prepare('UPDATE projects SET expires_at = ?').bind(Date.now() - 1000).run();
+  const dep = await api('/projects', { method: 'POST', body: { name: '短命项目', ttlMinutes: 10, files: [{ path: 'index.html', content: 'x' }] } });
+  assert(dep.status === 200 && dep.json.id, JSON.stringify(dep.json));
+  await env.DB.prepare('UPDATE projects SET expires_at = ? WHERE id = ?').bind(Date.now() - 1000, dep.json.id).run();
+  await sleep(400);
+  const text = await toolResultFor('TEST_TOOL_LISTSITES');
+  assert(text.includes('没有任何在线部署'), `实际:${text.slice(0, 300)}`);
+  assert(text.includes('短命项目'), `应提到刚销毁的项目,实际:${text.slice(0, 300)}`);
 });
 
 console.log('\n【MCP】');
@@ -480,6 +633,66 @@ await t('绕过路径也拿不到健康信息', async () => {
 await t('面板需要登录才能读项目列表', async () => {
   const r = await call('/administrator/api/projects', { useCookie: false });
   assert(r.status === 401, `实际 ${r.status}`);
+});
+
+console.log('\n【绑定缺失与扫描器路径】');
+const bareEnv = makeEnv({ ADMIN_USER: 'admin', ADMIN_PASS: 'pw-12345678' });
+delete bareEnv.DB;
+delete bareEnv.STORE;
+
+await t('未绑定 D1/KV 时,扫描器路径全部 404 而不是 500', async () => {
+  for (const p of ['/', '/ab', '/env', '/env.dev', '/env.prod', '/env.local', '/.env', '/config.json', '/wp-login.php']) {
+    const res = await worker.fetch(new Request(`https://panel.example.com${p}`), bareEnv, ctx);
+    assert(res.status === 404, `${p} 实际 ${res.status}`);
+  }
+});
+await t('未绑定 D1/KV 时,合法 ID 给出明确提示而不是 500', async () => {
+  const res = await worker.fetch(new Request('https://panel.example.com/abcd1234'), bareEnv, ctx);
+  assert(res.status === 503, `实际 ${res.status}`);
+  const text = await res.text();
+  assert(text.includes('DB') && text.includes('STORE'), `提示内容:${text.slice(0, 160)}`);
+});
+await t('绑定齐全后,扫描器路径仍然 404', async () => {
+  for (const p of ['/env.dev', '/env.local']) {
+    const res = await worker.fetch(new Request(`https://panel.example.com${p}`), env, ctx);
+    assert(res.status === 404, `${p} 实际 ${res.status}`);
+  }
+});
+await t('中文 ID + 压缩存储:编码 URL 直读还原', async () => {
+  const { createProject } = await import('../src/store/projects.js');
+  const big = '<h1>你好世界</h1>' + '这是一段足够长的重复内容用来触发压缩。'.repeat(10);
+  const r = await createProject(env, { deploy: {} }, {
+    id: '云星智创',
+    name: '中文ID测试',
+    files: [{ path: 'index.html', content: big }],
+  });
+  assert(!r.error, r.error);
+  const raw = await env.STORE.get('f/云星智创/index.html', 'arrayBuffer');
+  const bytes = new Uint8Array(raw);
+  assert(bytes[0] === 0x1f && bytes[1] === 0x8b, '长文本应被 gzip 压缩存储');
+  const res = await worker.fetch(new Request(`https://panel.example.com/${encodeURIComponent('云星智创')}`), env, ctx);
+  assert(res.status === 200, `实际 ${res.status}`);
+  const text = await res.text();
+  assert(text === big, '直读解压后应与原文完全一致');
+});
+await t('保存站点域名后,面板与工具链接都用它', async () => {
+  const r = await api('/settings', { method: 'POST', body: { site: { publicBaseUrl: 'https://ai.example.com' } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const list = await api('/projects');
+  assert(list.json.projects.length > 0, '应有项目');
+  assert(
+    list.json.projects.every((p) => p.url.startsWith('https://ai.example.com/')),
+    JSON.stringify(list.json.projects.map((p) => p.url)),
+  );
+});
+await t('保存限时开关与投递方式(可往返)', async () => {
+  const r = await api('/settings', { method: 'POST', body: { llm: { timeLimitEnabled: true, maxSeconds: 45 }, qq: { answerDelivery: 'active' } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const cur = await api('/settings');
+  assert(cur.json.settings.llm.timeLimitEnabled === true, '限时开关没保存');
+  assert(cur.json.settings.llm.maxSeconds === 45, '最大秒数没保存');
+  assert(cur.json.settings.qq.answerDelivery === 'active', '投递方式没保存');
+  await api('/settings', { method: 'POST', body: { llm: { timeLimitEnabled: false, maxSeconds: 600 }, qq: { answerDelivery: 'auto' } } });
 });
 
 alarm.stop();

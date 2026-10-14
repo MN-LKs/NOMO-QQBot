@@ -3,7 +3,8 @@ import { checkCredentials, issue, verify, readCookie, cookieHeader, COOKIE } fro
 import { mimeFor, isTextCt, isImageCt, gzipBytes, gunzipBytes, keyFor } from '../src/store/kvfile.js';
 import { quotaOf } from '../src/store/projects.js';
 import { splitSitePath } from '../src/serve.js';
-import { chunkText, toPlainText, truncate } from '../src/util/text.js';
+import { isSiteId, genSiteId, isReservedPath } from '../src/util/id.js';
+import { chunkText, toPlainText, truncate, clipMiddle } from '../src/util/text.js';
 import { calc, formatNumber } from '../src/util/calc.js';
 import { handleFrame, wsStatus, wsClose } from '../src/qq/gateway.js';
 import { panelPage, loginPage } from '../src/panel/ui.js';
@@ -53,6 +54,32 @@ eq('缺环境变量', missingEnv({}), ['ADMIN_USER', 'ADMIN_PASS']);
 eq('环境变量齐全', missingEnv(env1), []);
 const cfgDeep = flatten(deepMerge(DEFAULT_SETTINGS, { llm: { deepThinking: false } }), env1);
 eq('关掉深度思考 → effort=none', cfgDeep.reasoningEffort, 'none');
+const cfgA = flatten(DEFAULT_SETTINGS, env1);
+eq('默认不限制单次请求时间', cfgA.llmTimeLimitEnabled, false);
+eq('默认投递方式 auto', cfgA.answerDelivery, 'auto');
+eq('默认并发 4', cfgA.agentConcurrency, 4);
+eq('默认总预算无限', cfgA.agentBudgetMs, 0);
+const cfgB = flatten(deepMerge(DEFAULT_SETTINGS, {
+  llm: { timeLimitEnabled: true, maxSeconds: 30 },
+  qq: { answerDelivery: 'active' },
+  agent: { concurrency: 99, budgetSeconds: 600 },
+}), env1);
+ok('开启限时后生效', cfgB.llmTimeLimitEnabled === true && cfgB.llmMaxSeconds === 30);
+eq('投递方式 active', cfgB.answerDelivery, 'active');
+eq('并发上限夹到 10', cfgB.agentConcurrency, 10);
+eq('总预算 600 秒', cfgB.agentBudgetMs, 600000);
+
+// ---------- 工具配置(搜索条数 / 网页查询 API / 中转站面板) ----------
+eq('默认搜索条数 5', cfgA.searchResults, 5);
+eq('搜索条数可调', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results: 8 } }), env1).searchResults, 8);
+eq('搜索条数上限夹到 10', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results: 99 } }), env1).searchResults, 10);
+eq('搜索条数负数夹到 1', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results: -3 } }), env1).searchResults, 1);
+eq('搜索条数 0 回落默认', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results: 0 } }), env1).searchResults, 5);
+eq('网页查询 API 默认空', cfgA.extractUrl, '');
+eq('网页查询地址去尾斜杠', flatten(deepMerge(DEFAULT_SETTINGS, { extract: { url: 'https://r.example.com/api/' } }), env1).extractUrl, 'https://r.example.com/api');
+eq('网页查询 format 透传', flatten(deepMerge(DEFAULT_SETTINGS, { extract: { format: 'json' } }), env1).extractFormat, 'json');
+eq('中转站面板默认地址', cfgA.dashboardUrl, 'https://manage.nexacode.dpdns.org/api/dashboard');
+eq('中转站面板可清空', flatten(deepMerge(DEFAULT_SETTINGS, { dashboard: { url: '' } }), env1).dashboardUrl, '');
 
 // ---------- 登录鉴权 ----------
 ok('密码正确', checkCredentials(env1, 'admin', 'pw12345678'));
@@ -104,10 +131,38 @@ eq('至少 1 个', qSmall.maxProjects, 1);
 eq('拆站点路径', splitSitePath('/ab12cd34'), { id: 'ab12cd34', rest: '' });
 eq('拆子文件', splitSitePath('/ab12cd34/css/a.css'), { id: 'ab12cd34', rest: 'css/a.css' });
 eq('根路径', splitSitePath('/'), { id: '', rest: '' });
+eq('中文 ID 还原', splitSitePath('/%E4%BA%91%E6%98%9F%E6%99%BA%E5%88%9B'), { id: '云星智创', rest: '' });
+eq('中文子路径还原', splitSitePath('/ab12cd34/%E6%96%87%E4%BB%B6.html'), { id: 'ab12cd34', rest: '文件.html' });
+eq('坏编码不抛错', splitSitePath('/ab%zz'), { id: 'ab%zz', rest: '' });
+
+// ---------- 站点 ID 校验 ----------
+ok('合法 ID:纯 ASCII', isSiteId('ab12cd34'));
+ok('合法 ID:纯汉字', isSiteId('云星智创'));
+ok('合法 ID:混合', isSiteId('ab云星cd'));
+ok('非法 ID:含点(扫描器)', !isSiteId('env.dev'));
+ok('非法 ID:太短', !isSiteId('env'));
+ok('非法 ID:太长', !isSiteId('abcdefghijklmnopqrstuvwx12345'));
+ok('非法 ID:大写', !isSiteId('ABCD1234'));
+ok('非法 ID:空', !isSiteId(''));
+
+// ---------- 站点 ID 生成(部署用,默认 ascii) ----------
+const gA = genSiteId(8, 'ascii');
+ok('ascii ID 形状正确', /^[a-z0-9]{8}$/.test(gA), gA);
+ok('ascii ID 不含易混字符 i/l/o/0/1', !/[ilo01]/.test(gA), gA);
+ok('ascii ID 通过 isSiteId', isSiteId(gA), gA);
+const gC = genSiteId(8, 'cjk');
+ok('cjk ID 含汉字', /[\u4e00-\u9fff]/.test(gC), gC);
+ok('cjk ID 通过 isSiteId', isSiteId(gC), gC);
+eq('长度夹取:太短至少 4', genSiteId(1, 'ascii').length, 4);
+eq('长度夹取:太长最多 24', genSiteId(99, 'ascii').length, 24);
+ok('保留字会被识别', isReservedPath('index') && isReservedPath('test'));
 
 // ---------- 文本 ----------
 eq('truncate 结果不超过上限', truncate('abcdef', 3), 'ab…');
 eq('truncate 短的不动', truncate('ab', 10), 'ab');
+ok('clipMiddle 短文本不动', clipMiddle('abc', 10, 5) === 'abc');
+const clipped = clipMiddle('a'.repeat(5000), 100, 50);
+ok('clipMiddle 保留头尾并折叠中间', clipped.startsWith('a'.repeat(100)) && clipped.endsWith('a'.repeat(50)) && clipped.includes('中间省略 4850 字'));
 ok('chunkText 分片', chunkText('a'.repeat(2000), 800, 5).length === 3);
 ok('chunkText 上限', chunkText('a'.repeat(9000), 800, 5).length === 5);
 ok('toPlainText 去 Markdown', !toPlainText('**粗**').includes('**'));

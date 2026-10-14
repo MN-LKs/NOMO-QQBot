@@ -1,7 +1,8 @@
 import { loadEnv, missingEnv, FIXED } from './config.js';
 import { loadCfg, getRaw } from './store/settings.js';
 import { handleWebhook } from './qq/webhook.js';
-import { serveSite, splitSitePath } from './serve.js';
+import { serveSite, splitSitePath, page } from './serve.js';
+import { isSiteId } from './util/id.js';
 import { BotCore } from './core/do.js';
 import { handlePanelApi, jsonRes } from './panel/api.js';
 import { loginPage, panelPage } from './panel/ui.js';
@@ -37,11 +38,13 @@ export default {
 
       const { id } = splitSitePath(path);
       if (id && !RESERVED.has(id.toLowerCase())) {
-        const res = await serveSite(env, cfg, request, url, ctx);
-        if (res) return res;
+        // 扫描器天天在找 /env.dev、/.env 这类文件:形状不对的直接 404,不去碰数据库
+        if (!isSiteId(id)) return page('404', '这个地址没有对应的页面');
+        if (!env.DB || !env.STORE) return notReady(env);
+        return await serveSite(env, cfg, request, url, ctx);
       }
 
-      return new Response('Not Found', { status: 404, headers: { 'Cache-Control': 'no-store' } });
+      return page('404', '这个地址没有对应的页面');
     } catch (e) {
       await logWrite(env, 'error', 'worker', `未捕获异常 ${path}:${e?.stack || e}`).catch(() => null);
       return new Response('Internal Error', { status: 500 });
@@ -70,6 +73,14 @@ function html(body, status = 200, extra = {}) {
     status,
     headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...extra },
   });
+}
+
+// D1 / KV 还没绑定时,给一句人话,而不是一个看不懂的 500
+function notReady(env) {
+  const miss = [];
+  if (!env.DB) miss.push('D1 数据库(变量名填 DB)');
+  if (!env.STORE) miss.push('KV 命名空间(变量名填 STORE)');
+  return page('503', `部署服务还没就绪,请先在 Cloudflare 后台绑定:${miss.join('、')}`, 503, '绑定完成后重新访问这个地址即可');
 }
 
 async function panel(request, env, url, missing) {

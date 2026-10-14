@@ -4,6 +4,17 @@ export function truncate(s, n, tail = '…') {
   return str.slice(0, Math.max(0, n - tail.length)) + tail;
 }
 
+/**
+ * 超长文本掐头去尾:保留开头 head 字 + 结尾 tail 字,中间折叠成一行提示。
+ * 用于工具结果进上下文之前,让多轮工具调用的上下文更紧凑(用更小的空间装更多内容)。
+ */
+export function clipMiddle(s, head = 2600, tail = 1400) {
+  const str = String(s ?? '');
+  if (str.length <= head + tail + 80) return str;
+  const omitted = str.length - head - tail;
+  return `${str.slice(0, head)}\n…(中间省略 ${omitted} 字)…\n${str.slice(-tail)}`;
+}
+
 export function chunkText(text, size = 800, maxChunks = 5) {
   const str = String(text ?? '').replace(/\r\n?/g, '\n').trim();
   if (!str) return [];

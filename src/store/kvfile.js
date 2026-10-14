@@ -63,7 +63,8 @@ export async function putFile(env, siteId, path, content, ct) {
   const rawSize = bytes.byteLength;
   let stored = bytes;
   let gz = 0;
-  if (isTextCt(type) && rawSize > 256) {
+  // 压缩阈值压到 96 字节:小 HTML/CSS/JSON 也一起压,存储利用率更高
+  if (isTextCt(type) && rawSize > 96) {
     try {
       const packed = await gzipBytes(bytes);
       if (packed.byteLength < rawSize) {
@@ -83,6 +84,25 @@ export async function getFile(env, siteId, path, gz) {
   if (!raw) return null;
   const bytes = new Uint8Array(raw);
   if (gz) {
+    try {
+      return await gunzipBytes(bytes);
+    } catch {
+      return bytes;
+    }
+  }
+  return bytes;
+}
+
+/**
+ * 不查数据库直接读:靠 gzip 魔数(0x1f 0x8b)判断是否压缩。
+ * 压缩只对文本做,文本文件不会以这两个字节开头;万一解压失败也原样返回,不会损坏数据。
+ * 省掉一次 D1 查询,页面加载更快。
+ */
+export async function getFileAuto(env, siteId, path) {
+  const raw = await env.STORE.get(keyFor(siteId, path), 'arrayBuffer');
+  if (!raw) return null;
+  const bytes = new Uint8Array(raw);
+  if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
     try {
       return await gunzipBytes(bytes);
     } catch {

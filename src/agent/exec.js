@@ -5,7 +5,7 @@ import { webSearch } from './search.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
-const TOOL_LIST = 'calc, now, web_search, fetch_url, deploy_site, update_site, list_sites, read_site, delete_site, fs_write, fs_read, fs_list, fs_edit, fs_delete, fs_deploy, remember, recall, forget, random, encode';
+const TOOL_LIST = 'calc, now, web_search, fetch_url, deploy_site, update_site, list_sites, read_site, delete_site, fs_write, fs_read, fs_list, fs_edit, fs_delete, fs_deploy, remember, recall, forget, random, encode, query_dashboard';
 
 function fmtTime(d, offsetHours) {
   const t = new Date(d.getTime() + offsetHours * 3600_000);
@@ -18,6 +18,13 @@ function fmtTime(d, offsetHours) {
       + `${p(t.getUTCHours())}:${p(t.getUTCMinutes())}:${p(t.getUTCSeconds())}`,
     tz: offsetHours >= 0 ? `UTC+${offsetHours}` : `UTC${offsetHours}`,
   };
+}
+
+// 没配「站点域名」时 siteUrl 只给相对路径;这里补一句提醒,免得模型把半截链接发给用户
+function siteLink(cfg, url) {
+  const u = String(url || '');
+  if (/^https?:\/\//i.test(u)) return u;
+  return `${u} (完整网址需要管理员先在面板「设置 → 站点域名」里填写当前网址)`;
 }
 
 function assertPublicUrl(raw) {
@@ -62,6 +69,112 @@ async function fetchText(url, { timeoutMs = 20000, maxBytes = 800000 } = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * 走管理员配置的「网页查询 API」读页面(通常是能渲染 JS 的提取服务)。
+ * 请求约定: POST <extract.url>, body = { url, format? }, 返回 JSON 或纯文本。
+ * 任何失败都返回 null,由调用方回退到直接抓取。
+ */
+async function fetchViaExtract(cfg, targetUrl, maxChars) {
+  const body = { url: targetUrl };
+  if (cfg.extractFormat) body.format = cfg.extractFormat;
+  const headers = {
+    'Accept': 'application/json, text/plain, */*',
+    'Content-Type': 'application/json',
+    'User-Agent': UA,
+    ...(cfg.extractKey ? { 'Authorization': `Bearer ${cfg.extractKey}`, 'X-API-KEY': cfg.extractKey } : {}),
+    ...(cfg.extractHeaders || {}),
+  };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 30000);
+  try {
+    const res = await fetch(cfg.extractUrl, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
+    if (!res.ok) return null;
+    const ct = String(res.headers.get('content-type') || '');
+    let text = '';
+    if (ct.includes('json')) {
+      const json = await res.json().catch(() => null);
+      text = pickExtractText(json);
+    } else {
+      text = await res.text();
+    }
+    if (!text || !String(text).trim()) return null;
+    return `来自 ${targetUrl} 的正文(经网页查询 API):\n${truncate(String(text).trim(), maxChars)}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// 从各种提取服务的 JSON 里找正文:常见字段名优先,找不到就递归下去
+function pickExtractText(json, depth = 0) {
+  if (typeof json === 'string') return json;
+  if (!json || typeof json !== 'object' || depth > 6) return '';
+  for (const k of ['content', 'text', 'markdown', 'body', 'result', 'data', 'html', 'output']) {
+    const v = json[k];
+    if (typeof v === 'string' && v.trim()) return v;
+    if (v && typeof v === 'object') {
+      const inner = pickExtractText(v, depth + 1);
+      if (inner) return inner;
+    }
+  }
+  return '';
+}
+
+/** 查询中转站用量面板(默认 nexacode 面板接口,可在设置里改) */
+export async function queryDashboard(cfg) {
+  const url = String(cfg.dashboardUrl || '').trim();
+  if (!url) return '还没有配置中转站用量面板地址,请管理员在面板「设置 → AI 接口」里填写。';
+  let json;
+  try {
+    const res = await fetch(url, {
+      headers: { 'Accept': 'application/json', 'User-Agent': UA },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) return `中转站用量接口返回 HTTP ${res.status},可能地址不对或服务暂时不可用。`;
+    json = await res.json();
+  } catch (e) {
+    return `查询中转站用量失败:${e?.message || e}。可以稍后再试,或者告诉用户暂时查不了。`;
+  }
+  const d = json?.data && typeof json.data === 'object' ? json.data : json;
+  const rt = d?.realtime || {};
+  const today = d?.windows?.today || {};
+  const lines = ['📊 AI 中转站实时用量(数据来自中转站面板)'];
+  if (rt.all_requests !== undefined) lines.push(`· 累计请求:${fmtNum(rt.all_requests)} 次`);
+  if (rt.all_tokens !== undefined) lines.push(`· 累计 tokens:${fmtNum(rt.all_tokens)}`);
+  if (today.requests !== undefined) lines.push(`· 今日:${fmtNum(today.requests)} 次请求 / ${fmtNum(today.tokens)} tokens`);
+  const quota = Number(d?.totals?.quota);
+  if (Number.isFinite(quota) && quota > 0) {
+    lines.push(`· 剩余额度:${fmtNum(quota)} 点(约 $${(quota / 500000).toFixed(2)},换算以面板为准)`);
+  }
+  const recent = Array.isArray(d?.recent) ? d.recent.slice(0, 5) : [];
+  if (recent.length) {
+    lines.push('· 最近调用:');
+    const nowSec = Number(rt.now) || Math.floor(Date.now() / 1000);
+    for (const r of recent) {
+      const ago = r.created_at ? `${timeAgo(nowSec - Number(r.created_at))}前` : '';
+      lines.push(`  · ${r.username || '?'} | ${r.model_name || '?'} | ${fmtNum(r.tokens)} tokens${ago ? ` | ${ago}` : ''}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function fmtNum(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return String(n);
+  if (Math.abs(v) >= 1e8) return `${(v / 1e8).toFixed(2)} 亿`;
+  if (Math.abs(v) >= 1e4) return `${(v / 1e4).toFixed(1)} 万`;
+  return String(v);
+}
+
+function timeAgo(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  if (s < 60) return `${s} 秒`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时`;
+  return `${Math.floor(s / 86400)} 天`;
 }
 
 
@@ -148,19 +261,31 @@ export async function executeTool(name, args, ctx) {
       case 'fetch_url': {
         const u = assertPublicUrl(a.url);
         const maxChars = Math.max(500, Math.min(12000, Number(a.max_chars) || 4000));
+        // 配了「网页查询 API」就优先走它(能处理 JS 动态渲染的站点);失败再回退直抓
+        if (ctx.cfg.extractUrl) {
+          const viaApi = await fetchViaExtract(ctx.cfg, u.toString(), maxChars);
+          if (viaApi) return viaApi;
+        }
         const raw = await fetchText(u.toString());
         const head = raw.trimStart();
         const text = head.startsWith('{') || head.startsWith('[')
           ? truncate(raw, maxChars)
           : htmlToText(raw, maxChars);
-        return `来自 ${u.toString()} 的正文:\n${text}`;
+        const thin = text.length < 300
+          ? '\n\n【注意】这个页面直接抓到的正文很少,很可能是 JavaScript 动态渲染的站点(正文要等脚本跑完才出现),或者被反爬拦住了。建议改用 web_search 搜索相关关键词(摘要里往往有内容),或换一个静态来源;如果管理员配置了「网页查询 API」,也可以用那个来读。'
+          : '';
+        return `来自 ${u.toString()} 的正文:\n${text}${thin}`;
+      }
+
+      case 'query_dashboard': {
+        return await queryDashboard(ctx.cfg);
       }
 
 
       case 'remember': {
         const r = ctx.core.memSet(ctx.convId, a.key, a.value);
         if (r.error) return r.error;
-        return `记住了:${r.key} → ${r.value}\n(以后这个会话都会带上它,回复用户时不用特意复述)`;
+        return `记住了:${a.key} → ${a.value}\n(以后这个会话都会带上它,回复用户时不用特意复述)`;
       }
 
       case 'recall': {
@@ -192,7 +317,7 @@ export async function executeTool(name, args, ctx) {
         return [
           '部署成功 ✅',
           `项目名: ${r.name}`,
-          `链接: ${r.url}`,
+          `链接: ${siteLink(ctx.cfg, r.url)}`,
           `ID: ${r.id}`,
           `文件: ${files.map((f) => f.path).join(', ')}`,
           `存活: 从现在起 ${r.ttlMinutes} 分钟,期间任何修改都会重新计时`,
@@ -205,7 +330,7 @@ export async function executeTool(name, args, ctx) {
         const r = await ctx.core.updateSite(String(a.id || ''), { name: a.name, files });
         if (r.error) return r.error;
         return [
-          `修改成功 ✅ 链接不变: ${r.url}`,
+          `修改成功 ✅ 链接不变: ${siteLink(ctx.cfg, r.url)}`,
           `文件: ${files.map((f) => f.path).join(', ')}`,
           `倒计时已重置为 ${r.ttlMinutes} 分钟`,
           '【重要】请把链接原样告诉用户。',
@@ -214,10 +339,18 @@ export async function executeTool(name, args, ctx) {
 
       case 'list_sites': {
         const list = await ctx.core.listSites();
-        if (!list.length) return '当前没有任何在线部署。';
+        if (!list.length) {
+          const expired = await ctx.core.recentExpired().catch(() => []);
+          if (expired.length) {
+            return '当前没有任何在线部署。\n'
+              + `不过最近刚到期销毁的有 ${expired.length} 个:${expired.join('、')}。\n`
+              + '每个部署默认只活一段时间(到期自动销毁),期间再修改一次就会重新计时;要长期在线需要重新部署。';
+          }
+          return '当前没有任何在线部署。';
+        }
         return [
           `当前在线部署 ${list.length} 个:`,
-          ...list.map((s, i) => `${i + 1}. ${s.name} | ID=${s.id} | ${s.url} | 剩余 ${s.leftSeconds} 秒 | 访问 ${s.hits} 次 | 文件 ${s.files.join(',')}`),
+          ...list.map((s, i) => `${i + 1}. ${s.name} | ID=${s.id} | ${siteLink(ctx.cfg, s.url)} | 剩余 ${s.leftSeconds} 秒 | 访问 ${s.hits} 次 | 文件 ${s.files.join(',')}`),
         ].join('\n');
       }
 
@@ -230,7 +363,7 @@ export async function executeTool(name, args, ctx) {
           return `${a.path} 的内容:\n${truncate(f.content, 12000)}`;
         }
         return [
-          `${r.name}(${r.id}) ${r.url} · 剩余 ${r.leftSeconds} 秒`,
+          `${r.name}(${r.id}) ${siteLink(ctx.cfg, r.url)} · 剩余 ${r.leftSeconds} 秒`,
           '文件清单:',
           ...r.files.map((f) => `--- ${f.path} (${f.size} 字节) ---\n${truncate(f.content, 800)}`),
         ].join('\n');
@@ -286,7 +419,7 @@ export async function executeTool(name, args, ctx) {
         return [
           '部署成功 ✅(来自沙盒)',
           `项目名: ${r.name}`,
-          `链接: ${r.url}`,
+          `链接: ${siteLink(ctx.cfg, r.url)}`,
           `ID: ${r.id}`,
           `文件: ${norm.map((f) => f.path).join(', ')}`,
           `存活: ${r.ttlMinutes} 分钟`,

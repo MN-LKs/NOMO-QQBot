@@ -10,7 +10,7 @@ import { runAgent } from '../agent/loop.js';
 import { buildCompressPrompt, buildHelpText } from '../agent/prompt.js';
 import { chatWithFallback } from '../agent/llm.js';
 import { wsStart, wsClose, wsEnsure, wsStatus } from '../qq/gateway.js';
-import { isReservedPath } from '../util/id.js';
+import { isReservedPath, genSiteId } from '../util/id.js';
 
 const JOB_MAX_PER_ALARM = 25;
 const ALARM_DEADLINE_MS = 12 * 60 * 1000;
@@ -116,22 +116,31 @@ export class BotCore {
 
     let processed = 0;
     const deadline = Date.now() + ALARM_DEADLINE_MS;
+    // 多并发:一次领一批任务并行跑,单条消息的长时间非流式请求不再堵住后面排队的人
+    const concurrency = Math.max(1, Math.min(10, Number(cfg.agentConcurrency) || 4));
     while (processed < JOB_MAX_PER_ALARM && Date.now() < deadline) {
-      const job = this.claimNextJob();
-      if (!job) break;
-      processed++;
-      try {
-        await this.runJob(job);
-        this.finishJob(job.id, null);
-      } catch (e) {
-        this.finishJob(job.id, String(e?.stack || e).slice(0, 800));
-        await logWrite(this.env, 'error', 'do', `任务失败 ${job.kind}:${e?.message || e}`);
-        try {
-          await this.notifyFailure(job.payload, e);
-        } catch {
-          /* ignore */
-        }
+      const batch = [];
+      while (batch.length < concurrency) {
+        const job = this.claimNextJob();
+        if (!job) break;
+        batch.push(job);
       }
+      if (!batch.length) break;
+      processed += batch.length;
+      await Promise.allSettled(batch.map(async (job) => {
+        try {
+          await this.runJob(job);
+          this.finishJob(job.id, null);
+        } catch (e) {
+          this.finishJob(job.id, String(e?.stack || e).slice(0, 800));
+          await logWrite(this.env, 'error', 'do', `任务失败 ${job.kind}:${e?.message || e}`);
+          try {
+            await this.notifyFailure(job.payload, e);
+          } catch {
+            /* ignore */
+          }
+        }
+      }));
     }
 
     const pending = this.countJobs('pending');
@@ -217,6 +226,12 @@ Object.assign(BotCore.prototype, {
 
     log(`[收到] ${p.scene} ${p.nickname || p.userId || ''} :: ${truncate(text, 120)}`);
 
+    // 群内全量消息(没 @机器人,即 QQ 后台开了「机器人可查询群内所有消息」之后推来的每一条)
+    // 只有 /AI 开头的才触发 Agent,其余静默忽略 —— 否则整个群聊都会被拿去跑 AI。
+    if (p.scene === 'group' && p.mentioned === false && parseAiPrefix(text) === null) {
+      return;
+    }
+
     if (p.scene === 'group' && p.targetId) {
       const settings = cfg.settings;
       const list = settings.groups.list || [];
@@ -290,13 +305,26 @@ Object.assign(BotCore.prototype, {
       return;
     }
 
-    const body = cmd.name === 'ai' ? cmd.args : text;
+    let body = cmd.name === 'ai' ? cmd.args : text;
+    if (cmd.name !== 'ai') {
+      // '/AI你好' 这种没空格的写法 parseCommand 认不出来,这里手动剥掉前缀
+      const stripped = parseAiPrefix(text);
+      if (stripped !== null) body = stripped;
+    }
     if (!body) {
       await this.reply(p, buildHelpText(cfg));
       return;
     }
 
-    await this.reply(p, '🤖 Agent 正在运行,请稍等…');
+    const receivedAt = Number(p.ts) || Date.now();
+    // QQ 被动回复窗口:群聊 5 分钟、单聊 60 分钟,这里各留一点余量
+    const passiveWindowMs = p.scene === 'c2c' ? 55 * 60 * 1000 : 4.5 * 60 * 1000;
+    const overWindow = () => Date.now() - receivedAt > passiveWindowMs;
+
+    // 回执只在被动窗口内发;已经超窗就省下宝贵的主动额度,等结果一次性投递
+    if (!overWindow()) {
+      await this.reply(p, '🤖 Agent 正在运行,请稍等…', { mode: 'passive' });
+    }
     const started = Date.now();
 
     const result = await runAgent({
@@ -309,7 +337,8 @@ Object.assign(BotCore.prototype, {
     });
 
     const plain = toPlainText(result.reply);
-    const answerMode = p.scene === 'c2c' ? 'passive' : cfg.answerDelivery;
+    // 投递策略:auto = 被动窗口内用被动回复,超窗自动改用主动消息;active = 始终主动
+    const answerMode = cfg.answerDelivery === 'active' ? 'active' : (overWindow() ? 'active' : 'passive');
     const delivered = await this.reply(p, plain, { mode: answerMode });
     log(`[投递] 方式=${delivered.mode} 条数=${delivered.sent.length}`);
 
@@ -327,7 +356,7 @@ Object.assign(BotCore.prototype, {
     await bump(this.env, 'replies', 1).catch(() => null);
     await bump(this.env, 'tokens', result.usageTotal || 0).catch(() => null);
     await bump(this.env, 'tools', result.toolTrace.length || 0).catch(() => null);
-    log(`[完成] 轮次=${result.rounds} 工具=${result.trace2 ? '' : result.toolTrace.length} token=${result.usageTotal} 耗时=${Date.now() - started}ms 降级=${result.downgraded}`);
+    log(`[完成] 轮次=${result.rounds} 工具=${result.toolTrace.length} token=${result.usageTotal} 耗时=${Date.now() - started}ms 降级=${result.downgraded}`);
   },
 
   isAdmin(cfg, p) {
@@ -371,7 +400,9 @@ Object.assign(BotCore.prototype, {
   async deliverOnce(p, text, mode = 'passive') {
     const cfg = await this.cfg();
     const token = await this.getToken();
-    const chunks = chunkText(text, 800, 5);
+    // 条数上限:QQ 同一条消息最多回复 4~5 次(单聊 4 / 群聊 5),回执已经用掉 1 次,这里留够余量
+    const maxChunks = p.scene === 'c2c' ? 3 : 4;
+    const chunks = chunkText(text, cfg.chunkChars || 1500, maxChunks);
     if (!chunks.length) return { sent: [], errors: [], mode };
     const target = p.scene === 'c2c' ? { kind: 'c2c', id: p.targetId } : { kind: 'group', id: p.targetId };
     const r = await deliver(cfg, token, target, {
@@ -461,6 +492,7 @@ Object.assign(BotCore.prototype, {
   async listSites() {
     const cfg = await this.cfg();
     const rows = await P.listProjects(this.env);
+    await logWrite(this.env, 'info', 'site', `list_sites 查询:在线 ${rows.length} 个`).catch(() => null);
     const out = [];
     for (const r of rows) {
       const files = await P.listFiles(this.env, r.id);
@@ -476,6 +508,28 @@ Object.assign(BotCore.prototype, {
       });
     }
     return out;
+  },
+
+  // 最近到期销毁的项目名,给 list_sites 做"为什么没有"的解释用。
+  // 项目过期后很快会被自动清理,所以除了还没清理的,还要翻清理日志。
+  async recentExpired(hours = 2) {
+    const cut = Date.now() - hours * 3600 * 1000;
+    const now = Date.now();
+    const names = new Set();
+    const rows = await P.listProjects(this.env, { includeExpired: true }).catch(() => []);
+    for (const r of rows) {
+      if (Number(r.expires_at) <= now && Number(r.expires_at) > cut) names.add(r.name || r.id);
+    }
+    const r2 = await this.env.DB.prepare(
+      "SELECT msg FROM logs WHERE tag = 'do' AND msg LIKE '自动清理过期项目%' AND ts > ? ORDER BY id DESC LIMIT 10",
+    ).bind(cut).all().catch(() => ({ results: [] }));
+    for (const row of r2.results || []) {
+      for (const name of String(row.msg).replace(/^自动清理过期项目[:：]?/, '').split(/[,，、]/)) {
+        const t = name.trim();
+        if (t) names.add(t);
+      }
+    }
+    return [...names].slice(0, 5);
   },
 
   async getSite(id) {
@@ -507,7 +561,7 @@ Object.assign(BotCore.prototype, {
   async createSite({ name, description, files, owner }) {
     const cfg = await this.cfg();
     const settings = cfg.settings;
-    const id = genId();
+    const id = genId(cfg.idCharset, cfg.idLen);
     const r = await P.createProject(this.env, settings, {
       id,
       name: String(name || '未命名项目').slice(0, 60),
@@ -665,13 +719,18 @@ function parseCommand(text) {
   return { name: map[raw] || '', args };
 }
 
-function genId() {
-  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
+/**
+ * '/AI 问题'、'/ai问题' 都算 AI 触发;返回剥掉前缀后的正文。
+ * 不是 AI 触发返回 null(注意区分:触发但正文为空返回 '')。
+ */
+function parseAiPrefix(text) {
+  const m = String(text || '').match(/^\/ai\b\s*([\s\S]*)$/i);
+  return m ? m[1].trim() : null;
+}
+
+function genId(charset = 'ascii', len = 8) {
   for (let i = 0; i < 20; i++) {
-    const buf = new Uint8Array(8);
-    crypto.getRandomValues(buf);
-    let s = '';
-    for (const b of buf) s += chars[b % chars.length];
+    const s = genSiteId(len, charset);
     if (!isReservedPath(s)) return s;
   }
   return `p${Date.now().toString(36)}`;

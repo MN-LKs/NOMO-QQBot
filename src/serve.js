@@ -1,5 +1,5 @@
-import { getProject, listFiles, bumpHits, dataGet, dataSet } from './store/projects.js';
-import { getFile, mimeFor } from './store/kvfile.js';
+import { getProject, bumpHits, dataGet, dataSet } from './store/projects.js';
+import { getFileAuto, mimeFor } from './store/kvfile.js';
 import { bump, bumpDaily } from './store/stats.js';
 
 let pending = new Map();
@@ -9,7 +9,17 @@ let lastFlush = 0;
 export function splitSitePath(pathname) {
   const parts = String(pathname || '').split('/').filter(Boolean);
   if (!parts.length) return { id: '', rest: '' };
-  return { id: parts[0], rest: parts.slice(1).join('/') };
+  return { id: safeDecode(parts[0]), rest: parts.slice(1).map(safeDecode).join('/') };
+}
+
+// URL 里的路径是 percent-encoded 的(中文 ID、带空格的子文件),
+// 不还原的话查库永远查不到。编码坏了就当原样,交给 ID 校验去拒绝。
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
 function noteView(env, ctx, id) {
@@ -40,13 +50,13 @@ function noteView(env, ctx, id) {
   }
 }
 
-function page(title, msg, status = 404) {
+export function page(code, msg, status = 404, note = '这个页面由 NPAPI 临时部署,到期会自动销毁') {
   return new Response(
     `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
-    + `<title>${title}</title><style>body{font:15px/1.7 -apple-system,"PingFang SC",sans-serif;display:flex;align-items:center;`
+    + `<title>${code}</title><style>body{font:15px/1.7 -apple-system,"PingFang SC",sans-serif;display:flex;align-items:center;`
     + `justify-content:center;min-height:100vh;margin:0;background:#0f172a;color:#e2e8f0}div{text-align:center;padding:30px}`
     + `b{font-size:17px}h1{font-size:52px;margin:0 0 8px;color:#3b82f6}p{color:#94a3b8;font-size:13px}</style></head>`
-    + `<body><div><h1>404</h1><b>${msg}</b><p>这个页面由 NPAPI 临时部署,到期会自动销毁</p></div></body></html>`,
+    + `<body><div><h1>${code}</h1><b>${msg}</b><p>${note}</p></div></body></html>`,
     { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
@@ -77,20 +87,17 @@ export async function serveSite(env, cfg, request, url, ctx) {
   }
 
   const filePath = rest || 'index.html';
-  const files = await listFiles(env, id);
-  const meta = files.find((f) => f.path === filePath);
-  if (!meta) {
+  // 直读 KV(靠魔数判断是否压缩),不再先查一次 D1 文件表 —— 少一次查询,页面更快
+  const bytes = await getFileAuto(env, id, filePath);
+  if (!bytes) {
     if (!rest) return page('404', '这个项目还没有 index.html');
     return page('404', `找不到文件 ${filePath}`);
   }
 
-  const bytes = await getFile(env, id, meta.path, meta.gz);
-  if (!bytes) return page('404', '文件内容已丢失');
-
-  if (!rest || /\.html?$/.test(meta.path)) noteView(env, ctx, id);
+  if (!rest || /\.html?$/i.test(filePath)) noteView(env, ctx, id);
 
   const headers = {
-    'Content-Type': meta.ct || mimeFor(meta.path),
+    'Content-Type': mimeFor(filePath),
     'Cache-Control': 'public, max-age=60',
     'X-Content-Type-Options': 'nosniff',
   };

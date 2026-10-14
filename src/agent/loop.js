@@ -2,13 +2,16 @@ import { chatWithFallback } from './llm.js';
 import { buildTools } from './tools.js';
 import { executeTool } from './exec.js';
 import { buildSystemPrompt } from './prompt.js';
-import { truncate } from '../util/text.js';
+import { truncate, clipMiddle } from '../util/text.js';
 import { mcpToolDefs, callMcp } from './mcp.js';
-
-const TOTAL_BUDGET_MS = 4 * 60 * 1000;
 
 export async function runAgent({ cfg, core, convId, userText, meta = {}, log = console.log }) {
   const started = Date.now();
+  // 总预算:0 表示不限制(大工程多轮工具调用需要多久就多久,只受轮次上限约束)
+  const totalBudgetMs = Math.max(0, Number(cfg.agentBudgetMs) || 0);
+  // 单次非流式请求的超时:默认不限制;管理员打开"单次请求限时"开关后才生效
+  const perCallTimeoutMs = cfg.llmTimeLimitEnabled ? Math.max(5, Number(cfg.llmMaxSeconds) || 600) * 1000 : 0;
+
   let mcp = { defs: [], map: new Map() };
   try {
     mcp = await mcpToolDefs(core.env);
@@ -49,16 +52,13 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
   let lastError = '';
 
   for (let round = 0; round < cfg.agentMaxRounds; round++) {
-    if (Date.now() - started > TOTAL_BUDGET_MS) {
+    if (totalBudgetMs > 0 && Date.now() - started > totalBudgetMs) {
       log('[agent] 超出总时间预算,提前收尾');
       break;
     }
     rounds++;
 
-    const left = TOTAL_BUDGET_MS - (Date.now() - started);
-    const resp = await chatWithFallback(cfg, messages, tools, {
-      timeoutMs: Math.max(20000, Math.min(cfg.llmTimeoutMs, left + 5000)),
-    });
+    const resp = await chatWithFallback(cfg, messages, tools, { timeoutMs: perCallTimeoutMs });
 
     if (resp.downgradedFrom) downgraded = true;
     if (resp.error) lastError = resp.error;
@@ -83,7 +83,10 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
       tool_calls: calls,
     });
 
-    for (const call of calls) {
+    // 同一轮的多个工具调用并行执行(彼此独立,串行会白白浪费时间)。
+    // 结果按原顺序回填,保证 tool_call_id 一一对应。
+    const t0 = Date.now();
+    const settled = await Promise.allSettled(calls.map(async (call) => {
       const name = call.function?.name || '';
       let args = {};
       try {
@@ -91,16 +94,26 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
       } catch {
         args = {};
       }
-      const t0 = Date.now();
       const m = mcp.map.get(name);
       const result = m ? await callMcp(core.env, m.serverId, m.tool, args) : await executeTool(name, args, ctx);
+      return { name, args, result: String(result) };
+    }));
+
+    for (let i = 0; i < calls.length; i++) {
+      const call = calls[i];
+      const name = call.function?.name || '';
+      const s = settled[i];
+      const item = s.status === 'fulfilled'
+        ? s.value
+        : { name, args: {}, result: `工具执行出错:${s.reason?.message || s.reason}` };
       const ms = Date.now() - t0;
-      toolTrace.push({ name, args, result: truncate(result, 500), ms });
-      log(`[工具] ${name} ${JSON.stringify(args).slice(0, 200)} -> ${ms}ms :: ${String(result).replace(/\s+/g, ' ').slice(0, 300)}`);
+      toolTrace.push({ name: item.name, args: item.args, result: truncate(item.result, 500), ms });
+      log(`[工具] ${item.name} ${JSON.stringify(item.args).slice(0, 200)} -> ${ms}ms :: ${item.result.replace(/\s+/g, ' ').slice(0, 300)}`);
       messages.push({
         role: 'tool',
         tool_call_id: call.id,
-        content: String(result),
+        // 超长工具结果掐头去尾,上下文更紧凑,模型仍能看到关键部分
+        content: clipMiddle(item.result, 2600, 1400),
       });
     }
 
@@ -109,7 +122,7 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
         role: 'user',
         content: '现在请直接用简体中文给出最终回复,不要再调用任何工具。',
       });
-      const last = await chatWithFallback(cfg, messages, null, { timeoutMs: 60000 });
+      const last = await chatWithFallback(cfg, messages, null, { timeoutMs: perCallTimeoutMs });
       if (last.content.trim()) final = last.content;
     }
   }

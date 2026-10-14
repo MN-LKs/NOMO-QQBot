@@ -486,7 +486,7 @@ function pageSettings(){
  setTitle('设置');
  var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
  loadSettings(true).then(function(d){
-  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin;
+  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,ex=s.extract||{},dash=s.dashboard||{};
   var headers=function(o){return h(JSON.stringify(o||{},null,0))};
   v.innerHTML=
   '<div class="card"><h3>AI 接口</h3><div class="sub">机器人的大模型接口,支持任意 OpenAI 兼容的 /chat/completions</div>'+
@@ -500,12 +500,21 @@ function pageSettings(){
     ['none','minimal','low','medium','high','max'].map(function(x){return '<option value="'+x+'"'+(llm.reasoningEffort===x?' selected':'')+'>'+x+'</option>'}).join('')+
    '</select></div><div><label class="f">深度思考</label><select class="t" id="llm-think"><option value="1"'+(llm.deepThinking!==false?' selected':'')+'>开启</option><option value="0"'+(llm.deepThinking===false?' selected':'')+'>关闭</option></select></div></div>'+
    '<div class="fld"><label class="f">自定义请求头(JSON,可留空)</label><textarea class="t mono" id="llm-headers" placeholder=\\'{"X-Foo":"bar"}\\'>'+headers(llm.headers)+'</textarea></div>'+
+   '<div class="fld"><label class="f">中转站用量面板地址(「查额度」工具用,可留空)</label><input class="t mono" id="llm-dash" value="'+h(dash.url||'')+'" placeholder="https://manage.example.com/api/dashboard"></div>'+
+   '<div class="row"><div><label class="f">单次请求限时</label><select class="t" id="llm-limit"><option value="0"'+(llm.timeLimitEnabled!==true?' selected':'')+'>不限制(推荐,大工程慢慢跑)</option><option value="1"'+(llm.timeLimitEnabled===true?' selected':'')+'>限制</option></select></div>'+
+   '<div><label class="f">最大秒数(开启限时后生效)</label><input class="t" type="number" id="llm-secs" value="'+(llm.maxSeconds||600)+'"></div></div>'+
    '<button class="btn pri" id="llm-save">保存</button></div>'+
 
-  '<div class="card"><h3>联网搜索</h3><div class="sub">支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别</div>'+
+  '<div class="card"><h3>联网搜索</h3><div class="sub">关键词搜索:支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别</div>'+
    '<div class="fld"><label class="f">搜索接口地址</label><input class="t mono" id="se-url" value="'+h(se.url)+'" placeholder="https://api.example.com/search"></div>'+
    '<div class="fld"><label class="f">API Key</label><input class="t mono" id="se-key" value="'+h(se.key)+'"></div>'+
    '<div class="fld"><label class="f">自定义请求头(JSON)</label><textarea class="t mono" id="se-headers">'+headers(se.headers)+'</textarea></div>'+
+   '<div class="fld"><label class="f">每次搜索返回条数(1-10)</label><input class="t" type="number" min="1" max="10" id="se-results" value="'+(se.results||5)+'"></div>'+
+   '<div class="hint" style="margin:14px 0 8px">网页查询 API(可选):配置后,fetch_url 会优先用它来读页面——适合抓 JS 动态渲染、直接抓取拿不到正文的站点。请求约定:POST 该地址,body 为 {"url":"目标网址","format":"下面的返回结构"};返回 JSON 时自动提取 content/text/markdown 等字段。</div>'+
+   '<div class="fld"><label class="f">网页查询接口地址</label><input class="t mono" id="ex-url" value="'+h(ex.url||'')+'" placeholder="https://reader.example.com/api"></div>'+
+   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ex-key" value="'+h(ex.key||'')+'"></div>'+
+   '<div class="fld"><label class="f">返回结构(format 字段,可留空)</label><input class="t mono" id="ex-format" value="'+h(ex.format||'')+'" placeholder="json / markdown / text"></div>'+
+   '<div class="fld"><label class="f">自定义请求头(JSON)</label><textarea class="t mono" id="ex-headers">'+headers(ex.headers)+'</textarea></div>'+
    '<button class="btn pri" id="se-save">保存</button> <button class="btn" id="se-test">测试搜索</button></div>'+
 
   '<div class="card"><h3>人设提示词</h3><div class="sub">留空使用默认人设。这段文字会作为系统提示词的一部分发给模型</div>'+
@@ -521,6 +530,9 @@ function pageSettings(){
    '<div class="fld"><label class="f">连接方式</label><select class="t" id="qq-mode">'+
     '<option value="websocket"'+(qq.mode!=='webhook'?' selected':'')+'>WebSocket(推荐,无需开放平台配置)</option>'+
     '<option value="webhook"'+(qq.mode==='webhook'?' selected':'')+'>WebHook(需要在开放平台填回调地址)</option></select></div>'+
+   '<div class="fld"><label class="f">结果投递方式</label><select class="t" id="qq-delivery">'+
+    '<option value="auto"'+(qq.answerDelivery!=='active'?' selected':'')+'>自动(被动窗口内被动回复,超时改用主动消息)</option>'+
+    '<option value="active"'+(qq.answerDelivery==='active'?' selected':'')+'>总是主动消息(耗每月额度,慎用)</option></select></div>'+
    '<div class="fld" id="qq-hook" style="display:'+(qq.mode==='webhook'?'block':'none')+'">'+
     '<label class="f">回调地址(填到 QQ 开放平台 → 开发设置 → 回调配置)</label>'+
     '<div class="row"><div><input class="t mono" id="qq-cb" value="'+h(d.callbackUrl)+'"></div>'+
@@ -541,6 +553,9 @@ function pageSettings(){
    '<div style="flex:0 0 110px"><button class="btn" id="ad-addb">添加</button></div></div></div>'+
 
   '<div class="card"><h3>部署参数</h3><div class="sub">KV 空间分配:固定保留 + 每项目保底 + 动态池(按访问量优先分配)</div>'+
+   '<div class="fld"><label class="f">站点域名(部署链接显示与复制用的完整网址)</label>'+
+   '<div class="row"><div><input class="t mono" id="site-base" value="'+h((s.site&&s.site.publicBaseUrl)||'')+'" placeholder="https://ai.example.com"></div>'+
+   '<div style="flex:0 0 130px"><button class="btn" id="site-get">获取当前网址</button></div></div></div>'+
    '<div class="row"><div><label class="f">默认有效期(分钟)</label><input class="t" type="number" id="dp-ttl" value="'+dep.ttlSeconds/60+'"></div>'+
    '<div><label class="f">每次续期(分钟)</label><input class="t" type="number" id="dp-ext" value="'+dep.extendSeconds/60+'"></div>'+
    '<div><label class="f">同时可部署项目数</label><input class="t" type="number" id="dp-max" value="'+dep.maxProjects+'"></div></div>'+
@@ -585,7 +600,10 @@ function bindSettings(v){
   var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){return}
   save({llm:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),
    model:v.querySelector('#llm-model').value.trim(),headers:hh,reasoningEffort:v.querySelector('#llm-effort').value,
-   deepThinking:v.querySelector('#llm-think').value==='1'}},b)};
+   deepThinking:v.querySelector('#llm-think').value==='1',
+   timeLimitEnabled:v.querySelector('#llm-limit').value==='1',
+   maxSeconds:Math.max(5,Number(v.querySelector('#llm-secs').value)||600)},
+   dashboard:{url:v.querySelector('#llm-dash').value.trim()}},b)};
  v.querySelector('#llm-list').onclick=function(){var b=this;b.disabled=true;b.textContent='获取中…';
   var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){b.disabled=false;b.textContent='获取模型列表';return}
   api('/models',{method:'POST',body:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),headers:hh}})
@@ -597,7 +615,11 @@ function bindSettings(v){
   }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='获取模型列表'})};
  v.querySelector('#llm-test').onclick=function(){testLLM(v)};
  v.querySelector('#se-save').onclick=function(){var b=this;var hh;try{hh=jparse(v.querySelector('#se-headers').value,{})}catch(e){return}
-  save({search:{url:v.querySelector('#se-url').value.trim(),key:v.querySelector('#se-key').value.trim(),headers:hh}},b)};
+  var eh;try{eh=jparse(v.querySelector('#ex-headers').value,{})}catch(e){return}
+  save({search:{url:v.querySelector('#se-url').value.trim(),key:v.querySelector('#se-key').value.trim(),headers:hh,
+    results:Math.max(1,Math.min(10,Number(v.querySelector('#se-results').value)||5))},
+   extract:{url:v.querySelector('#ex-url').value.trim(),key:v.querySelector('#ex-key').value.trim(),headers:eh,
+    format:v.querySelector('#ex-format').value.trim()}},b)};
  v.querySelector('#se-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
   api('/test-search',{method:'POST',body:{query:'今天有什么新闻'}}).then(function(r){
    modal('搜索测试结果','<pre class="code">'+h(JSON.stringify(r,null,2))+'</pre>','<button class="btn" data-x>关闭</button>')
@@ -612,7 +634,8 @@ function bindSettings(v){
  v.querySelector('#qq-save').onclick=function(){var b=this;b.disabled=true;b.textContent='应用中…';
   api('/settings',{method:'POST',body:{qq:{appId:v.querySelector('#qq-id').value.trim(),
    appSecret:v.querySelector('#qq-secret').value.trim(),mode:v.querySelector('#qq-mode').value,
-   sandbox:v.querySelector('#qq-env').value==='sandbox'}}})
+   sandbox:v.querySelector('#qq-env').value==='sandbox',
+   answerDelivery:v.querySelector('#qq-delivery').value}}})
   .then(function(r){toast(r.note||'已保存并应用');S.settings=null;render()})
   .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='保存并应用'})};
  function tog(sel,path){var n=v.querySelector(sel);if(!n)return;n.onclick=function(){
@@ -638,9 +661,11 @@ function bindSettings(v){
    reserveBytes:Math.max(0,Number(v.querySelector('#dp-res').value)||0)*1048576,
    perProjectBytes:Math.max(1,Number(v.querySelector('#dp-per').value)||64)*1048576,
    dataQuotaBytes:Math.max(0,Number(v.querySelector('#dp-data').value)||0)*1024,
-   maxPerDay:Math.max(1,Number(v.querySelector('#dp-day').value)||50)}}})
+   maxPerDay:Math.max(1,Number(v.querySelector('#dp-day').value)||50)},
+   site:{publicBaseUrl:v.querySelector('#site-base').value.trim()}}})
   .then(function(r){toast(r.note||'已保存');S.settings=null;render()})
   .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='保存'})};
+ v.querySelector('#site-get').onclick=function(){v.querySelector('#site-base').value=location.origin;toast('已填入当前网址,记得点保存')};
  v.querySelector('#lg-save').onclick=function(){save({logs:{retentionDays:Number(v.querySelector('#lg-days').value)||7,
   maxRows:Number(v.querySelector('#lg-max').value)||8000}},this)};
  v.querySelector('#lg-clean').onclick=function(){var b=this;b.disabled=true;

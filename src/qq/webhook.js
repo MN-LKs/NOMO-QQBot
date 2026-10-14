@@ -46,6 +46,9 @@ export function normaliseEvent(payload) {
       ...base,
       kind: 'message',
       scene: isC2C ? 'c2c' : 'group',
+      // GROUP_AT_MESSAGE_CREATE = @机器人;GROUP_MESSAGE_CREATE = 群内全量消息(需在开放平台申请)。
+      // 全量模式下只有 /AI 开头的消息才会触发 Agent,其余静默记录。
+      mentioned: isC2C ? true : t === 'GROUP_AT_MESSAGE_CREATE',
       convId: isC2C ? `u:${openId}` : `g:${groupId}`,
       targetId: isC2C ? openId : groupId,
       messageId: d.id,

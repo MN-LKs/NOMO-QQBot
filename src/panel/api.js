@@ -111,6 +111,13 @@ export async function handlePanelApi(request, env, url, ctx) {
           headers: cleanHeaders(patch.search.headers),
         };
       }
+      if (patch.extract) {
+        patch.extract = {
+          ...patch.extract,
+          key: keepSecret(patch.extract.key, cur.extract.key),
+          headers: cleanHeaders(patch.extract.headers),
+        };
+      }
       if (patch.qq) {
         patch.qq = { ...patch.qq, appSecret: keepSecret(patch.qq.appSecret, cur.qq.appSecret) };
       }

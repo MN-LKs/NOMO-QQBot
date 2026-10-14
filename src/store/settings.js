@@ -63,6 +63,7 @@ export function maskSecrets(settings) {
   };
   if (out.llm?.apiKey) out.llm.apiKey = mask(out.llm.apiKey);
   if (out.search?.key) out.search.key = mask(out.search.key);
+  if (out.extract?.key) out.extract.key = mask(out.extract.key);
   if (out.qq?.appSecret) out.qq.appSecret = mask(out.qq.appSecret);
   return out;
 }

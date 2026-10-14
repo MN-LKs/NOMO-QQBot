@@ -52,3 +52,13 @@ export function isReservedPath(id) {
   if (RESERVED_PATHS.has(id.toLowerCase())) return true;
   return id.length < 4;
 }
+
+const SITE_ID_RE = /^[a-z0-9\u4e00-\u9fff]{4,24}$/;
+
+/**
+ * 站点 ID 的合法形状:小写字母 / 数字 / 汉字,长度 4~24,与 genSiteId 的生成规则对齐。
+ * 放在路由层用,可以在碰数据库之前就把扫描器路径(如 /env.dev、/.env)挡成 404。
+ */
+export function isSiteId(id) {
+  return SITE_ID_RE.test(String(id || ''));
+}
