@@ -5,6 +5,7 @@ import { bump, bumpDaily, touchGroup } from '../store/stats.js';
 import * as P from '../store/projects.js';
 import { getFile, mimeFor } from '../store/kvfile.js';
 import { chunkText, toPlainText, truncate } from '../util/text.js';
+import { enhanceFiles } from '../util/seo.js';
 import { fetchAccessToken, deliver } from '../qq/api.js';
 import { runAgent } from '../agent/loop.js';
 import { buildCompressPrompt, buildHelpText } from '../agent/prompt.js';
@@ -325,6 +326,16 @@ Object.assign(BotCore.prototype, {
       return;
     }
 
+    // AI 接口没配好时,直接给一句人话,别让用户等到一个 fetch 报错
+    if (!cfg.llmBaseUrl || !cfg.llmApiKey) {
+      const lack = [!cfg.llmBaseUrl ? '接口地址' : '', !cfg.llmApiKey ? 'API Key' : '']
+        .filter(Boolean).join('、');
+      await logWrite(this.env, 'warn', 'agent', `AI 接口未配置(${lack}),已拒绝请求`).catch(() => null);
+      await this.reply(p, `⚙️ 管理员还没有配置 AI 接口(缺 ${lack})。\n`
+        + '请到管理面板「设置 → AI 接口」填写地址、Key 和模型,保存后再来找我。');
+      return;
+    }
+
     const receivedAt = Number(p.ts) || Date.now();
     // QQ 被动回复窗口:群聊 5 分钟、单聊 60 分钟,这里各留一点余量
     const passiveWindowMs = p.scene === 'c2c' ? 55 * 60 * 1000 : 4.5 * 60 * 1000;
@@ -571,13 +582,20 @@ Object.assign(BotCore.prototype, {
     const cfg = await this.cfg();
     const settings = cfg.settings;
     const id = genId(cfg.idCharset, cfg.idLen);
+    const url = this.siteUrl(cfg, id);
+    // AI 没写全 SEO 字段时用默认值补齐(写了的不覆盖)
+    const enhanced = enhanceFiles(files || [], {
+      name: String(name || ''),
+      description: String(description || ''),
+      url,
+    });
     const r = await P.createProject(this.env, settings, {
       id,
       name: String(name || '未命名项目').slice(0, 60),
       description: String(description || '').slice(0, 200),
       owner: String(owner || ''),
       source: 'ai',
-      files: (files || []).map((f) => ({ path: f.path, content: f.content, ct: mimeFor(f.path) })),
+      files: enhanced.map((f) => ({ path: f.path, content: f.content, ct: mimeFor(f.path) })),
       ttlSeconds: cfg.siteTtlSeconds,
     });
     if (r.error) return { error: r.error };
@@ -591,7 +609,12 @@ Object.assign(BotCore.prototype, {
     if (!p) return { error: `没有找到 ID 为 ${id} 的项目` };
     const lim = await P.limitsFor(this.env, cfg.settings, id);
     if (files && files.length) {
-      const r = await P.writeFiles(this.env, id, files.map((f) => ({ path: f.path, content: f.content, ct: mimeFor(f.path) })), lim.limit);
+      const enhanced = enhanceFiles(files, {
+        name: String(p.name || ''),
+        description: String(p.description || ''),
+        url: this.siteUrl(cfg, id),
+      });
+      const r = await P.writeFiles(this.env, id, enhanced.map((f) => ({ path: f.path, content: f.content, ct: mimeFor(f.path) })), lim.limit);
       if (r.error) return { error: r.error };
     }
     await P.recalc(this.env, id);

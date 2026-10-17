@@ -204,12 +204,63 @@ await t('登录后可以访问面板页', async () => {
   const r = await call('/administrator');
   assert(r.status === 200 && r.text.includes('管理面板'), `实际 ${r.status}`);
 });
+await t('面板页带 HSTS / nosniff / CSP', async () => {
+  const r = await call('/administrator');
+  const hsts = r.headers.get('Strict-Transport-Security') || '';
+  assert(hsts.includes('max-age=31536000'), `HSTS:${hsts}`);
+  assert(hsts.includes('includeSubDomains') && hsts.includes('preload'), `HSTS:${hsts}`);
+  assert((r.headers.get('X-Content-Type-Options') || '') === 'nosniff', '缺 nosniff');
+  assert((r.headers.get('Permissions-Policy') || '').includes('camera='), '缺 Permissions-Policy');
+  assert((r.headers.get('Content-Security-Policy') || '').includes("frame-ancestors 'none'"), '缺 CSP');
+  assert((r.headers.get('X-Frame-Options') || '') === 'DENY', '缺 X-Frame-Options');
+});
+await t('登录页同样带 CSP', async () => {
+  const r = await call('/administrator', { useCookie: false });
+  assert((r.headers.get('Content-Security-Policy') || '').includes("default-src 'none'"), '登录页缺 CSP');
+});
+await t('robots.txt 可访问并屏蔽管理面板', async () => {
+  const r = await call('/robots.txt', { useCookie: false });
+  assert(r.status === 200, `实际 ${r.status}`);
+  assert(r.text.includes('Disallow: /administrator'), r.text);
+  assert((r.headers.get('Content-Type') || '').includes('text/plain'), r.headers.get('Content-Type'));
+});
 await t('伪造 Cookie 无效', async () => {
-  const bad = cookie.replace(/.$/, 'x');
+  // 注意:不能只改 base64url 的最后一个字符 —— 末尾可能只剩填充位,
+  // 改了也解出同样的字节,测试会随机假通过。这里改签名第一个字符。
+  const raw = cookie.split('=').slice(1).join('=');
+  const [payload, sig] = raw.split('.');
+  const flipped = (sig[0] === 'A' ? 'B' : 'A') + sig.slice(1);
+  const bad = `${cookie.split('=')[0]}=${payload}.${flipped}`;
   const res = await worker.fetch(new Request('https://panel.example.com/administrator/api/overview', {
     headers: { Cookie: bad },
   }), env, ctx);
   assert(res.status === 401, `实际 ${res.status}`);
+});
+
+console.log('\n【未配置管理员:登录锁定】');
+const lockedEnv = makeEnv({});
+await t('面板直接显示「登录功能已关闭」', async () => {
+  const res = await worker.fetch(new Request('https://panel.example.com/administrator'), lockedEnv, ctx);
+  assert(res.status === 200, `实际 ${res.status}`);
+  const text = await res.text();
+  assert(text.includes('登录功能已关闭'), text.slice(0, 120));
+  assert(!text.includes('请登录以继续'), '锁定后不该再显示登录表单');
+});
+await t('锁定状态下登录接口返回 403', async () => {
+  const res = await worker.fetch(new Request('https://panel.example.com/administrator/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user: 'a', pass: 'b' }),
+  }), lockedEnv, ctx);
+  assert(res.status === 403, `实际 ${res.status}`);
+  const j = await res.json();
+  assert(String(j.error || '').includes('登录功能已关闭'), JSON.stringify(j));
+});
+await t('未初始化时业务地址给出 503 提示', async () => {
+  const res = await worker.fetch(new Request('https://panel.example.com/abcd1234'), lockedEnv, ctx);
+  assert(res.status === 503, `实际 ${res.status}`);
+  const text = await res.text();
+  assert(text.includes('管理员账号未设置'), text.slice(0, 160));
 });
 
 console.log('\n【设置】');
@@ -250,6 +301,14 @@ await t('测试模型:对话与工具调用两项都跑', async () => {
   assert(r.status === 200, JSON.stringify(r.json));
   assert(r.json.chat && r.json.chat.ok, JSON.stringify(r.json.chat));
   assert(r.json.tool && typeof r.json.tool.ok === 'boolean', '应有工具调用结论');
+});
+await t('接口地址自动整理:补 https、剥掉 /chat/completions', async () => {
+  const r = await api('/settings', { method: 'POST', body: { llm: { baseUrl: 'api.example.com/v1/chat/completions' } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(String(r.json.note || '').includes('整理'), `应有整理提示:${r.json.note}`);
+  const cur = await api('/settings');
+  assert(cur.json.settings.llm.baseUrl === 'https://api.example.com/v1', cur.json.settings.llm.baseUrl);
+  await api('/settings', { method: 'POST', body: { llm: { baseUrl: `http://127.0.0.1:${up.port}/v1` } } });
 });
 
 console.log('\n【部署项目】');
@@ -338,6 +397,81 @@ await t('删除项目会连 KV 数据一起清掉', async () => {
   assert(keys.length === 0, `KV 还有残留:${keys.join(',')}`);
   const r2 = await api(`/projects/${pid}`);
   assert(r2.status === 404, '详情应 404');
+});
+
+await t('部署页自动补 SEO(缺失时用默认值)', async () => {
+  let id = '';
+  try {
+    const r = await api('/projects', {
+      method: 'POST',
+      body: {
+        name: 'SEO 测试页',
+        description: '一句话说明这个页面',
+        ttlMinutes: 10,
+        files: [{ path: 'index.html', content: '<!DOCTYPE html><html><head><title>我的页面</title></head><body>seo</body></html>' }],
+      },
+    });
+    assert(r.status === 200, JSON.stringify(r.json));
+    id = r.json.id;
+    const p = await call(`/${id}`);
+    assert(p.text.includes('<meta name="description" content="一句话说明这个页面">'), p.text.slice(0, 300));
+    assert(p.text.includes('<meta charset="utf-8">'), '应补 charset');
+    assert(p.text.includes('property="og:title"') && p.text.includes('property="og:description"'), '应补 Open Graph');
+    assert(p.text.includes('name="twitter:card"'), '应补 Twitter Card');
+    const canonical = (p.text.match(/<link rel="canonical" href="([^"]+)">/) || [])[1] || '';
+    assert(canonical.endsWith(`/${id}`), `canonical 不对:${canonical}`);
+    assert(p.text.includes('rel="icon"'), '应补 favicon');
+    assert(p.text.includes('name="theme-color"'), '应补 theme-color');
+    assert(p.text.includes('application/ld+json'), '应补 JSON-LD');
+    assert(p.text.includes('lang="zh-CN"'), '应补 lang');
+    assert((p.headers.get('Content-Security-Policy') || '').includes('default-src'), '部署页应带 CSP');
+    assert((p.headers.get('Strict-Transport-Security') || '').includes('max-age'), '部署页应带 HSTS');
+    assert((p.headers.get('X-Frame-Options') || '') === 'SAMEORIGIN', '部署页应带 X-Frame-Options');
+    assert((p.headers.get('Permissions-Policy') || '').includes('camera='), '部署页应带 Permissions-Policy');
+  } finally {
+    if (id) await api(`/projects/${id}`, { method: 'DELETE' });
+  }
+});
+await t('部署页已写的 SEO 字段不被覆盖', async () => {
+  let id = '';
+  try {
+    const html = '<!DOCTYPE html><html lang="en"><head><meta name="description" content="作者自己写的"><title>t</title></head><body>keep</body></html>';
+    const r = await api('/projects', {
+      method: 'POST',
+      body: { name: 'SEO 保留', description: '默认描述', ttlMinutes: 10, files: [{ path: 'index.html', content: html }] },
+    });
+    assert(r.status === 200, JSON.stringify(r.json));
+    id = r.json.id;
+    const p = await call(`/${id}`);
+    assert(p.text.includes('content="作者自己写的"'), p.text.slice(0, 300));
+    assert((p.text.match(/<meta name="description"/g) || []).length === 1, 'description 不该重复注入');
+    assert(p.text.includes('lang="en"'), '不该改作者写的 lang');
+    assert((p.text.match(/application\/ld\+json/g) || []).length === 1, 'JSON-LD 只应有一份');
+    assert((p.text.match(/rel="canonical"/g) || []).length === 1, 'canonical 只应有一份');
+    assert(p.text.includes('property="og:title"'), '缺的 OG 仍应补');
+  } finally {
+    if (id) await api(`/projects/${id}`, { method: 'DELETE' });
+  }
+});
+await t('Agent 部署路径同样补 SEO', async () => {
+  const ns = env.BOT_CORE;
+  if (!ns.core('core')) ns.get(ns.idFromName('core'));
+  const core = ns.core('core');
+  let id = '';
+  try {
+    const r = await core.createSite({
+      name: 'AgentSEO',
+      description: '来自 Agent',
+      files: [{ path: 'index.html', content: '<!DOCTYPE html><html><head></head><body>a</body></html>' }],
+    });
+    assert(!r.error && r.id, JSON.stringify(r));
+    id = r.id;
+    const p = await call(`/${id}`);
+    assert(p.text.includes('<meta name="description" content="来自 Agent">'), p.text.slice(0, 300));
+    assert(p.text.includes('property="og:title"'), 'Agent 路径也应补 OG');
+  } finally {
+    if (id) await core.deleteSite(id);
+  }
 });
 
 await t('每日部署上限生效', async () => {
@@ -888,6 +1022,16 @@ await t('保存站点域名后,面板与工具链接都用它', async () => {
     JSON.stringify(list.json.projects.map((p) => p.url)),
   );
 });
+await t('站点域名没写协议 / 写成 http 时自动整理成 https', async () => {
+  const r = await api('/settings', { method: 'POST', body: { site: { publicBaseUrl: 'http://ai.example.com/' } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(String(r.json.note || '').includes('整理'), `应有整理提示:${r.json.note}`);
+  const cur = await api('/settings');
+  assert(cur.json.settings.site.publicBaseUrl === 'https://ai.example.com', cur.json.settings.site.publicBaseUrl);
+  assert(cur.json.callbackUrl === 'https://ai.example.com/qq/webhook', cur.json.callbackUrl);
+  const list = await api('/projects');
+  assert(list.json.projects.every((p) => p.url.startsWith('https://ai.example.com/')), '链接应使用 https');
+});
 await t('保存限时开关与投递方式(可往返)', async () => {
   const r = await api('/settings', { method: 'POST', body: { llm: { timeLimitEnabled: true, maxSeconds: 45 }, qq: { answerDelivery: 'active' } } });
   assert(r.status === 200, JSON.stringify(r.json));
@@ -896,6 +1040,22 @@ await t('保存限时开关与投递方式(可往返)', async () => {
   assert(cur.json.settings.llm.maxSeconds === 45, '最大秒数没保存');
   assert(cur.json.settings.qq.answerDelivery === 'active', '投递方式没保存');
   await api('/settings', { method: 'POST', body: { llm: { timeLimitEnabled: false, maxSeconds: 600 }, qq: { answerDelivery: 'auto' } } });
+});
+
+console.log('\n【AI 接口未配置】');
+await t('AI 接口没填时给出人话提示,而不是上游报错', async () => {
+  await api('/settings', { method: 'POST', body: { llm: { apiKey: '' } } });
+  resetDoCfg();
+  const before = calls.messages.length;
+  await sendGroupAt('测试未配置');
+  for (let i = 0; i < 200 && calls.messages.length < before + 1; i++) await sleep(50);
+  assert(calls.messages.length >= before + 1, `应有一条提示回复(实际 +${calls.messages.length - before})`);
+  const last = calls.messages[calls.messages.length - 1];
+  const content = String(last.body.content || '');
+  assert(content.includes('还没有配置 AI 接口'), content.slice(0, 200));
+  assert(content.includes('AI 接口'), content.slice(0, 200));
+  await api('/settings', { method: 'POST', body: { llm: { apiKey: 'sk-test-1234567890' } } });
+  resetDoCfg();
 });
 
 alarm.stop();

@@ -172,7 +172,7 @@ src/
     mcp.js            MCP 客户端(Streamable HTTP / SSE)
     search.js         搜索与网页读取适配(单地址 → /search + /reader)
     prompt.js         系统提示词与人设
-  util/               文本、计算、编码、字节等小工具
+  util/               文本、计算、编码、字节、SEO 兜底等小工具
 ```
 
 ---
@@ -193,10 +193,11 @@ src/
 ## 九、测试
 
 ```
-npm test                 单元测试  144 项(纯逻辑:配额、鉴权、压缩、网关帧处理、技能挑选、存储选路……)
+npm run audit            静态自检  语法、相对 import、npm 脚本、wrangler main、Markdown 链接、关键文档
+npm test                 单元测试  196 项(纯逻辑:配额、鉴权、压缩、网关帧处理、技能挑选、存储选路、地址整理、SEO 兜底……)
 npm run test:jsmini      沙盒解释器 59 项(语法、运算、作用域、超时、防死循环)
-npm run test:integration 集成测试  68 项(假上游 + 真 Worker 代码)
-npm run test:all         敏感扫描 + 上面全部
+npm run test:integration 集成测试  84 项(假上游 + 真 Worker 代码)
+npm run test:all         静态自检 + 敏感扫描 + 上面全部(合计 339 项)
 ```
 
 集成测试会现场起三个假服务器:

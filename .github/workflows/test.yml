@@ -16,6 +16,8 @@ jobs:
           node-version: '22'
       - name: 敏感信息扫描(有密钥就直接失败)
         run: node tools/scan-secrets.js
+      - name: 静态自检(语法 / import / 脚本 / 文档链接)
+        run: node tools/audit.js
       - name: 单元测试
         run: node test/run.js
       - name: 沙盒解释器测试

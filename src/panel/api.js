@@ -1,4 +1,4 @@
-import { FIXED, missingEnv } from '../config.js';
+import { FIXED, missingEnv, normalizeApiBase, normalizeBaseUrl } from '../config.js';
 import { getRaw, savePatch, maskSecrets, loadCfg } from '../store/settings.js';
 import { list as logList, clear as logClear, cleanup as logCleanup, count as logCount, write as logWrite } from '../store/logs.js';
 import { overview } from '../store/stats.js';
@@ -15,6 +15,7 @@ import { listModules, getModule, saveModule, removeModule } from '../store/modul
 import { listSkills, saveSkill, removeSkill, parseSkillDoc } from '../agent/skills.js';
 import { loadExts, saveExt, removeExt } from '../agent/exts.js';
 import { execBackend, sandboxFetch } from '../core/backend.js';
+import { enhanceFiles } from '../util/seo.js';
 
 const JSON_H = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 
@@ -104,18 +105,35 @@ export async function handlePanelApi(request, env, url, ctx) {
       const patch = body || {};
       const notes = [];
       if (patch.llm) {
+        const rawBase = patch.llm.baseUrl === undefined ? undefined : String(patch.llm.baseUrl || '').trim();
         patch.llm = {
           ...patch.llm,
+          baseUrl: rawBase === undefined ? cur.llm.baseUrl : normalizeApiBase(rawBase),
           apiKey: keepSecret(patch.llm.apiKey, cur.llm.apiKey),
           headers: cleanHeaders(patch.llm.headers),
         };
+        if (rawBase && patch.llm.baseUrl && rawBase !== patch.llm.baseUrl) {
+          notes.push(`AI 接口地址已整理为 ${patch.llm.baseUrl}`);
+        }
       }
       if (patch.search) {
+        const rawBase = patch.search.baseUrl === undefined ? undefined : String(patch.search.baseUrl || '').trim();
         patch.search = {
           ...patch.search,
+          baseUrl: rawBase === undefined ? cur.search.baseUrl : normalizeBaseUrl(rawBase),
           key: keepSecret(patch.search.key, cur.search.key),
           headers: cleanHeaders(patch.search.headers),
         };
+        if (rawBase && patch.search.baseUrl && rawBase !== patch.search.baseUrl) {
+          notes.push(`搜索接口地址已整理为 ${patch.search.baseUrl}`);
+        }
+      }
+      if (patch.site && patch.site.publicBaseUrl !== undefined) {
+        const rawBase = String(patch.site.publicBaseUrl || '').trim();
+        patch.site = { ...patch.site, publicBaseUrl: normalizeBaseUrl(rawBase, { httpsOnly: true }) };
+        if (rawBase && patch.site.publicBaseUrl && rawBase !== patch.site.publicBaseUrl) {
+          notes.push(`站点域名已整理为 ${patch.site.publicBaseUrl}`);
+        }
       }
       if (patch.qq) {
         patch.qq = { ...patch.qq, appSecret: keepSecret(patch.qq.appSecret, cur.qq.appSecret) };
@@ -138,7 +156,7 @@ export async function handlePanelApi(request, env, url, ctx) {
     }
 
     if (path === '/models' && method === 'POST') {
-      const baseUrl = String(body?.baseUrl || '').replace(/\/+$/, '');
+      const baseUrl = normalizeApiBase(body?.baseUrl);
       const apiKey = String(body?.apiKey || '');
       const headers = cleanHeaders(body?.headers);
       if (!baseUrl) return jsonRes({ error: '请先填写接口地址' }, 400);
@@ -161,7 +179,7 @@ export async function handlePanelApi(request, env, url, ctx) {
     }
 
     if (path === '/test-llm' && method === 'POST') {
-      const baseUrl = String(body?.baseUrl || '').replace(/\/+$/, '');
+      const baseUrl = normalizeApiBase(body?.baseUrl);
       const apiKey = String(body?.apiKey || '');
       const headers = cleanHeaders(body?.headers);
       const model = String(body?.model || '');
@@ -311,13 +329,19 @@ async function projectsApi(request, env, url, seg, method, body) {
       }
     }
     const id = pickId(env, settings);
+    // 面板粘贴部署同样补 SEO 兜底(缺失才补,已有的不覆盖)
+    const enhanced = enhanceFiles(files, {
+      name: String(body?.name || ''),
+      description: String(body?.description || ''),
+      url: `${base}/${id}`,
+    });
     const r = await P.createProject(env, settings, {
       id,
       name: String(body?.name || '未命名项目').slice(0, 60),
       description: String(body?.description || '').slice(0, 200),
       owner: env.ADMIN_USER,
       source: 'panel',
-      files: files.map((f) => ({ path: f.path, content: f.content, ct: f.ct || mimeFor(f.path) })),
+      files: enhanced.map((f) => ({ path: f.path, content: f.content, ct: f.ct || mimeFor(f.path) })),
       ttlSeconds: Math.max(60, num(body?.ttlMinutes, 10) * 60),
     });
     if (r.error) return jsonRes({ error: r.error }, 400);
@@ -714,7 +738,7 @@ const RESERVED = new Set([
 ]);
 
 function callbackUrl(env, url, settings) {
-  const base = settings.site.publicBaseUrl || `${url.protocol}//${url.host}`;
+  const base = normalizeBaseUrl(settings.site.publicBaseUrl, { httpsOnly: true }) || `${url.protocol}//${url.host}`;
   return `${base}${FIXED.webhookPath}`;
 }
 

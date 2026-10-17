@@ -1,11 +1,11 @@
-import { loadEnv, missingEnv, FIXED } from './config.js';
+import { loadEnv, missingEnv, FIXED, CSP_PANEL } from './config.js';
 import { loadCfg, getRaw } from './store/settings.js';
 import { handleWebhook } from './qq/webhook.js';
 import { serveSite, splitSitePath, page, handleSiteApi, RESERVED } from './serve.js';
 import { isSiteId } from './util/id.js';
 import { BotCore } from './core/do.js';
 import { handlePanelApi, jsonRes } from './panel/api.js';
-import { loginPage, panelPage } from './panel/ui.js';
+import { loginPage, panelPage, lockedPage } from './panel/ui.js';
 import { isAuthed, checkCredentials, issue, cookieHeader, clearCookieHeader, readCookie, lockedFor, noteFail, clearFail, sameOrigin } from './panel/auth.js';
 import { write as logWrite } from './store/logs.js';
 import { ensureSchema } from './store/db.js';
@@ -13,9 +13,8 @@ import { ensureDetected } from './store/storage.js';
 
 export { BotCore };
 
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
+async function handleFetch(request, env, ctx) {
+  const url = new URL(request.url);
     const path = url.pathname;
 
     try {
@@ -25,7 +24,15 @@ export default {
       }
 
       if (missing.length) {
-        return html(`<h2 style="font:16px sans-serif;padding:40px">还没有配置管理员账号,请在 Cloudflare 后台添加环境变量:${missing.join(' / ')}</h2>`, 503);
+        return page('503', '服务还没有初始化完成:管理员账号未设置,面板登录已关闭', 503,
+          '请在 Cloudflare 后台配置 ADMIN_USER / ADMIN_PASS 两个环境变量,然后刷新本页');
+      }
+
+      // 搜索引擎和扫描器都会来要这个文件;顺手告诉它们别碰管理面板
+      if (path === '/robots.txt') {
+        return new Response('User-agent: *\nAllow: /\nDisallow: /administrator\n', {
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'public, max-age=3600' },
+        });
       }
 
       if (path === '/favicon.ico') return new Response(null, { status: 204 });
@@ -55,6 +62,28 @@ export default {
       await logWrite(env, 'error', 'worker', `未捕获异常 ${path}:${e?.stack || e}`).catch(() => null);
       return new Response('Internal Error', { status: 500 });
     }
+}
+
+const SECURITY_HEADERS = {
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains; preload',
+  'X-Content-Type-Options': 'nosniff',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=(self)',
+};
+
+// 所有响应统一补安全头;页面自己设过的(比如部署页面)不覆盖
+function withSecurityHeaders(res) {
+  if (!res || res.status === 101 || res.webSocket) return res;
+  const headers = new Headers(res.headers);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) {
+    if (!headers.has(k)) headers.set(k, v);
+  }
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
+}
+
+export default {
+  async fetch(request, env, ctx) {
+    return withSecurityHeaders(await handleFetch(request, env, ctx));
   },
 
   async scheduled(_event, env, ctx) {
@@ -71,7 +100,13 @@ export default {
 function html(body, status = 200, extra = {}) {
   return new Response(body, {
     status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', ...extra },
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Content-Security-Policy': CSP_PANEL,
+      'X-Frame-Options': 'DENY',
+      ...extra,
+    },
   });
 }
 
@@ -85,6 +120,14 @@ function notReady(env) {
 
 async function panel(request, env, url, missing) {
   const path = url.pathname;
+
+  // 管理员账号没配置:登录功能直接关闭,不再摆一个「缺变量」的登录表单
+  if (missing.length) {
+    if (path.startsWith(`${FIXED.panelPath}/api/`)) {
+      return jsonRes({ error: '登录功能已关闭' }, 403);
+    }
+    return html(lockedPage());
+  }
 
   if (path === `${FIXED.panelPath}/api/login`) {
     if (request.method !== 'POST') return jsonRes({ error: '只接受 POST' }, 405);
@@ -127,7 +170,7 @@ async function panel(request, env, url, missing) {
   const authed = await isAuthed(request, env);
   if (!authed) {
     if (path.startsWith(`${FIXED.panelPath}/api/`)) return jsonRes({ error: '未登录' }, 401);
-    return html(loginPage({ hint: missing.length ? `还缺少环境变量:${missing.join(' / ')}` : '' }));
+    return html(loginPage());
   }
 
   if (path.startsWith(`${FIXED.panelPath}/api/`)) {

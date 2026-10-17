@@ -8,13 +8,16 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "build": "node tools/strip-docs.js",
     "tail": "wrangler tail --format pretty",
     "check:secrets": "node tools/scan-secrets.js",
+    "audit": "node tools/audit.js",
+    "strip:docs": "node tools/strip-docs.js --force",
     "pretest": "node tools/scan-secrets.js",
     "test": "node test/run.js",
     "test:jsmini": "node test/jsmini.test.mjs",
     "test:integration": "node test/integration.js",
-    "test:all": "node tools/scan-secrets.js && node test/run.js && node test/jsmini.test.mjs && node test/integration.js"
+    "test:all": "node tools/audit.js && node tools/scan-secrets.js && node test/run.js && node test/jsmini.test.mjs && node test/integration.js"
   },
   "devDependencies": {
     "wrangler": "^4.20.0"

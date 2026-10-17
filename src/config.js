@@ -28,6 +28,12 @@ export const FIXED = {
 
 export const ENV_VARS = ['ADMIN_USER', 'ADMIN_PASS'];
 
+// 面板等自有页面的 CSP:不加载外部资源,只允许自身与内联脚本/样式
+export const CSP_PANEL = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+
+// 部署页面是 AI 生成的:允许内联脚本/样式、https 与 wss 资源,但禁止 http 与插件
+export const CSP_SITE = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https: wss:; object-src 'none'";
+
 export const KV_TOTAL_BYTES = 1024 * 1024 * 1024;
 
 export const ARCHITECTURES = ['html', 'prefab', 'custom'];
@@ -135,13 +141,48 @@ export function trimSlash(s) {
   return String(s || '').replace(/\/+$/, '');
 }
 
+const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+// 本地/内网地址保留 http,其余 http 一律升级成 https
+const LOCAL_HOST_RE = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+)(?::\d+)?(?:\/|$)/i;
+
+/**
+ * 把用户随手填的地址整理成可用的绝对地址:
+ * - 没写协议(api.x.com/v1)→ 自动补 https://
+ * - 写成 //api.x.com/v1 → 补 https:
+ * - 去掉结尾多余的斜杠
+ * - httpsOnly 时把公网 http 升级成 https(本地/内网地址保持原样)
+ */
+export function normalizeBaseUrl(raw, { httpsOnly = false } = {}) {
+  let s = String(raw === null || raw === undefined ? '' : raw).trim();
+  if (!s) return '';
+  if (s.startsWith('//')) s = 'https:' + s;
+  if (!SCHEME_RE.test(s)) s = 'https://' + s;
+  s = s.replace(/\/+$/, '');
+  // 只写了协议、没有主机名(比如 https://)时当作空
+  if (/^[a-z][a-z0-9+.-]*:$/i.test(s)) return '';
+  if (httpsOnly && /^http:\/\//i.test(s) && !LOCAL_HOST_RE.test(s.slice(7))) {
+    s = 'https://' + s.slice(7);
+  }
+  return s;
+}
+
+/**
+ * AI 接口地址的整理:在 normalizeBaseUrl 之上,再容忍用户把
+ * 完整的 /chat/completions 粘进来(否则会拼成 .../chat/completions/chat/completions)。
+ */
+export function normalizeApiBase(raw) {
+  let s = normalizeBaseUrl(raw);
+  s = s.replace(/\/chat\/completions\/?$/i, '');
+  return trimSlash(s);
+}
+
 /**
  * 从一个「带 /v1 的 url」推导出搜索与网页读取两个端点。
  * 例:https://api.x.com/v1 -> search=https://api.x.com/v1/search, reader=https://api.x.com/v1/reader
  * 如果用户直接填了带 /search 或 /reader 后缀的地址,就按填的来。
  */
 export function deriveEndpoints(baseUrl, searchPath = '/search', readerPath = '/reader') {
-  let base = trimSlash(baseUrl);
+  let base = trimSlash(normalizeBaseUrl(baseUrl));
   let sp = String(searchPath || '/search').trim() || '/search';
   let rp = String(readerPath || '/reader').trim() || '/reader';
   if (!sp.startsWith('/')) sp = '/' + sp;
@@ -184,7 +225,7 @@ export function flatten(settings, env = {}) {
     appSecret: String(qq.appSecret || '').trim(),
     mode: qq.mode === 'websocket' ? 'websocket' : 'webhook',
     intents: Number(qq.intents) || 33554432,
-    llmBaseUrl: trimSlash(llm.baseUrl),
+    llmBaseUrl: normalizeApiBase(llm.baseUrl),
     llmApiKey: String(llm.apiKey || '').trim(),
     llmModel: String(llm.model || 'deepseek-v4.1-flash').trim(),
     llmHeaders: llm.headers && typeof llm.headers === 'object' ? llm.headers : {},
@@ -207,7 +248,7 @@ export function flatten(settings, env = {}) {
     storageCacheKV: settings.storage?.cacheKV !== false,
     dashboardUrl: String(settings.dashboard?.url || '').trim(),
     persona: String(settings.persona || ''),
-    publicBaseUrl: trimSlash(settings.site?.publicBaseUrl),
+    publicBaseUrl: normalizeBaseUrl(settings.site?.publicBaseUrl, { httpsOnly: true }),
     llmTimeLimitEnabled: llm.timeLimitEnabled === true,
     llmMaxSeconds: Math.max(5, Number(llm.maxSeconds) || 600),
     compressChars: Math.max(1000, Number(llm.compressChars) || FIXED.compressChars),

@@ -1,4 +1,4 @@
-import { deepMerge, flatten, missingEnv, DEFAULT_SETTINGS, FIXED } from '../src/config.js';
+import { deepMerge, flatten, missingEnv, DEFAULT_SETTINGS, FIXED, normalizeBaseUrl, normalizeApiBase } from '../src/config.js';
 import { checkCredentials, issue, verify, readCookie, cookieHeader, COOKIE } from '../src/panel/auth.js';
 import { mimeFor, isTextCt, isImageCt, gzipBytes, gunzipBytes, keyFor } from '../src/store/kvfile.js';
 import { quotaOf } from '../src/store/projects.js';
@@ -7,13 +7,17 @@ import { isSiteId, genSiteId, isReservedPath } from '../src/util/id.js';
 import { chunkText, toPlainText, truncate, clipMiddle } from '../src/util/text.js';
 import { calc, formatNumber } from '../src/util/calc.js';
 import { handleFrame, wsStatus, wsClose } from '../src/qq/gateway.js';
-import { panelPage, loginPage } from '../src/panel/ui.js';
+import { panelPage, loginPage, lockedPage } from '../src/panel/ui.js';
+import { seoEnhance } from '../src/util/seo.js';
+import { collectDocTargets, stripDocs } from '../tools/strip-docs.js';
 import { BUILTIN_EXTS, enabledToolSet, safeToolName, externalToolDefs } from '../src/agent/exts.js';
 import { pickSkills, parseSkillDoc, parseTriggers } from '../src/agent/skills.js';
 import { resolveStores, availability } from '../src/store/storage.js';
 import { uriEncode, sha256Hex } from '../src/store/s3.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 let pass = 0;
 const fails = [];
@@ -88,6 +92,20 @@ eq('baseUrl 推导出读取端点', cfgE.readerApiUrl, 'https://r.example.com/v1
 eq('baseUrl 带 /search 后缀会剥离', flatten(deepMerge(DEFAULT_SETTINGS, { search: { baseUrl: 'https://r.example.com/v1/search' } }), env1).searchApiUrl, 'https://r.example.com/v1/search');
 eq('自定义路径', flatten(deepMerge(DEFAULT_SETTINGS, { search: { baseUrl: 'https://r.example.com', searchPath: '/s', readerPath: '/r' } }), env1).readerApiUrl, 'https://r.example.com/r');
 eq('读取 format 透传', flatten(deepMerge(DEFAULT_SETTINGS, { search: { readerFormat: 'json' } }), env1).searchReaderFormat, 'json');
+
+// ---------- 地址整理(协议 / 尾斜杠 / 完整端点) ----------
+eq('没写协议自动补 https', normalizeBaseUrl('api.x.com/v1/'), 'https://api.x.com/v1');
+eq('协议相对地址补 https', normalizeBaseUrl('//api.x.com/v1'), 'https://api.x.com/v1');
+eq('空地址保持空', normalizeBaseUrl('   '), '');
+eq('只有协议没有主机名也算空', normalizeBaseUrl('https://'), '');
+eq('公网 http 升级 https', normalizeBaseUrl('http://ai.example.com/', { httpsOnly: true }), 'https://ai.example.com');
+eq('本机地址保留 http', normalizeBaseUrl('http://127.0.0.1:8787', { httpsOnly: true }), 'http://127.0.0.1:8787');
+eq('内网地址保留 http', normalizeBaseUrl('http://192.168.1.9:8787', { httpsOnly: true }), 'http://192.168.1.9:8787');
+eq('完整 chat/completions 会被剥掉', normalizeApiBase('https://api.x.com/v1/chat/completions'), 'https://api.x.com/v1');
+eq('AI 地址缺协议也能用', flatten(deepMerge(DEFAULT_SETTINGS, { llm: { baseUrl: 'api.x.com/v1/' } }), env1).llmBaseUrl, 'https://api.x.com/v1');
+eq('搜索地址缺协议也能推出端点', flatten(deepMerge(DEFAULT_SETTINGS, { search: { baseUrl: 'search.x.com/v1' } }), env1).searchApiUrl, 'https://search.x.com/v1/search');
+eq('站点域名缺协议自动补全', flatten(deepMerge(DEFAULT_SETTINGS, { site: { publicBaseUrl: 'ai.example.com/' } }), env1).publicBaseUrl, 'https://ai.example.com');
+eq('站点域名 http 升级 https', flatten(deepMerge(DEFAULT_SETTINGS, { site: { publicBaseUrl: 'http://ai.example.com' } }), env1).publicBaseUrl, 'https://ai.example.com');
 eq('中转站面板默认地址', cfgA.dashboardUrl, 'https://manage.nexacode.dpdns.org/api/dashboard');
 eq('中转站面板可清空', flatten(deepMerge(DEFAULT_SETTINGS, { dashboard: { url: '' } }), env1).dashboardUrl, '');
 
@@ -290,6 +308,84 @@ function extractScripts(html) {
       fails.push(`前端脚本 ${name} 语法错误:${String(e.stderr || e.message).slice(0, 200)}`);
     }
   }
+}
+
+// ---------- 面板锁定 / SEO 兜底 / 描述文件清理 ----------
+{
+  const locked = lockedPage();
+  ok('缺管理员时面板显示「登录功能已关闭」', locked.includes('登录功能已关闭'));
+  ok('锁定页不再显示登录表单', !locked.includes('请登录以继续'));
+  ok('锁定页带 noindex', locked.includes('noindex'));
+}
+{
+  const full = '<!DOCTYPE html><html><head><title>小游戏</title></head><body>x</body></html>';
+  const out = seoEnhance(full, { name: '2048', description: '一个 2048 小游戏', url: 'https://ai.example.com/abcd1234' });
+  ok('补 meta description', out.includes('<meta name="description" content="一个 2048 小游戏">'));
+  ok('补 charset', out.includes('<meta charset="utf-8">'));
+  ok('补 canonical', out.includes('<link rel="canonical" href="https://ai.example.com/abcd1234">'));
+  ok('补 Open Graph', out.includes('property="og:title"') && out.includes('property="og:description"') && out.includes('property="og:url"'));
+  ok('补 Twitter Card', out.includes('name="twitter:card"') && out.includes('name="twitter:title"'));
+  ok('补 theme-color', out.includes('name="theme-color"'));
+  ok('补 favicon', out.includes('rel="icon"') && out.includes('data:image/svg+xml'));
+  ok('补 JSON-LD', out.includes('application/ld+json') && out.includes('"@type":"WebPage"') && out.includes('"@type":"WebSite"'));
+  ok('JSON-LD 带 url', out.includes('https://ai.example.com/abcd1234'));
+  ok('补 lang', out.includes('lang="zh-CN"'));
+  ok('补 viewport', out.includes('name="viewport"'));
+  ok('不重复补 title', (out.match(/<title>/g) || []).length === 1);
+  ok('不重复补 charset', (out.match(/charset=/g) || []).length === 1);
+  ok('不重复补 description', (out.match(/name="description"/g) || []).length === 1);
+
+  const custom = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="description" content="我自己写的"><meta property="og:title" content="我的 OG"><link rel="canonical" href="https://x.example/y"><script type="application/ld+json">{}</script></head><body></body></html>';
+  const out2 = seoEnhance(custom, { name: 'x', description: '默认描述', url: 'https://ai.example.com/z' });
+  ok('已有 description 不覆盖', out2.includes('<meta name="description" content="我自己写的">') && !out2.includes('<meta name="description" content="默认描述">'));
+  ok('已有 OG 不覆盖', (out2.match(/property="og:title"/g) || []).length === 1 && out2.includes('content="我的 OG"'));
+  ok('已有 canonical 不覆盖', (out2.match(/rel="canonical"/g) || []).length === 1 && out2.includes('href="https://x.example/y"'));
+  ok('已有 JSON-LD 不重复', (out2.match(/application\/ld\+json/g) || []).length === 1);
+  ok('已有 lang 不改', out2.includes('lang="en"'));
+
+  const empty = '<html><head><title> </title><meta name="description" content=""><link rel="canonical" href=""></head><body></body></html>';
+  const out3 = seoEnhance(empty, { name: '空字段', description: '默认描述', url: 'https://ai.example.com/e' });
+  ok('空 title 用默认值替换', out3.includes('<title>空字段</title>'));
+  ok('空 description 用默认值替换', out3.includes('content="默认描述"'));
+  ok('空 canonical 用默认值替换', out3.includes('href="https://ai.example.com/e"'));
+
+  const bare = '<html><body>hi</body></html>';
+  const out4 = seoEnhance(bare, { name: '裸页面' });
+  ok('没有 head 时自动补一个', out4.includes('<head>') && out4.includes('</head>'));
+  ok('裸页面也能拿到标题', out4.includes('<title>裸页面</title>'));
+  ok('裸页面补 doctype', out4.startsWith('<!DOCTYPE html>'));
+
+  const frag = '<h1>片段</h1>';
+  const out5 = seoEnhance(frag, { name: 'x' });
+  ok('裸片段会包成完整文档', out5.startsWith('<!DOCTYPE html>') && out5.includes('<head>') && out5.includes('<h1>片段</h1>'));
+
+  const evil = seoEnhance('<html><head></head><body></body></html>', { name: '</script><script>alert(1)</script>' });
+  ok('JSON-LD 里转义 <', !evil.includes('</script><script>alert(1)'));
+}
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nomo-docs-'));
+  fs.mkdirSync(path.join(tmp, 'docs'), { recursive: true });
+  fs.mkdirSync(path.join(tmp, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(tmp, 'node_modules', 'dep'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'README.md'), '# hi');
+  fs.writeFileSync(path.join(tmp, 'docs', 'FAQ.md'), '# qa');
+  fs.writeFileSync(path.join(tmp, 'src', 'notes.md'), '# notes');
+  fs.writeFileSync(path.join(tmp, 'src', 'app.js'), 'export const a = 1;');
+  fs.writeFileSync(path.join(tmp, 'node_modules', 'dep', 'README.md'), '# dep');
+  const targets = collectDocTargets(tmp);
+  ok('收集到根 README', targets.files.some((f) => f.endsWith('README.md')));
+  ok('收集到子目录 md', targets.files.some((f) => f.endsWith('notes.md')));
+  ok('docs 目录整体作为目标', targets.dirs.some((d) => d.endsWith('docs')));
+  ok('不碰 node_modules', !targets.files.some((f) => f.includes('node_modules')));
+  const dry = stripDocs(tmp, { force: false });
+  ok('未授权时不动文件', dry.skipped === true && fs.existsSync(path.join(tmp, 'README.md')));
+  const run = stripDocs(tmp, { force: true });
+  ok('授权后删除 md 与 docs', !fs.existsSync(path.join(tmp, 'README.md')) && !fs.existsSync(path.join(tmp, 'docs')));
+  ok('子目录 md 也删掉', !fs.existsSync(path.join(tmp, 'src', 'notes.md')));
+  ok('业务代码保留', fs.existsSync(path.join(tmp, 'src', 'app.js')));
+  ok('node_modules 保留', fs.existsSync(path.join(tmp, 'node_modules', 'dep', 'README.md')));
+  ok('返回被删除的清单', run.removed.length >= 3);
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 console.log(`\n${'='.repeat(60)}`);

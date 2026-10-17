@@ -59,3 +59,19 @@ node tools/scan-secrets.js     # 或者 npm run check:secrets
 - 不做用户系统,只有你一个管理员账号
 - 不收集访问者隐私,部署页面只统计次数,不记录 IP 与 UA
 - 不把对话内容写进日志正文以外的地方(日志本身可在面板里随时清空)
+
+## 七、响应头与静态自检
+
+- 所有响应都带:`Strict-Transport-Security`、`X-Content-Type-Options: nosniff`、
+  `Referrer-Policy: strict-origin-when-cross-origin`、
+  `Permissions-Policy: camera=(self), microphone=(self), geolocation=(self)`
+- 面板与错误页:严格 CSP(`default-src 'none'`),禁止一切外部资源
+- 部署页:宽松 CSP(允许内联脚本/样式与 https 资源),并带 `X-Frame-Options: SAMEORIGIN`
+- 提交前可以再跑一次静态自检:
+
+```bash
+npm run audit
+```
+
+它会检查所有 JS 的语法、相对 import 是否能解析、`package.json` 脚本引用的文件是否存在、
+`wrangler.toml` 的 `main` 是否存在、Markdown 相对链接是否失效、关键文档是否齐全。

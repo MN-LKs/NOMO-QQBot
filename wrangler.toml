@@ -5,11 +5,23 @@ compatibility_date = "2026-09-01"
 [observability]
 enabled = true
 
-# 只保留两个变量:面板的用户名和密码。
-# 其它配置(AI 接口、搜索、存储桶、APPID/AppSecret、连接方式等)全部在面板里设置,存进 D1。
-[vars]
-ADMIN_USER = ""
-ADMIN_PASS = ""
+# 部署构建前自动清理 README / docs 等描述文件,保持构建上下文干净。
+# (Workers 只打包被 import 的模块,描述文件本来不会进部署产物;这一步是防止以后
+#  启用静态资源目录时把文档一起传上去。)
+# 脚本只在 Cloudflare 构建环境(WORKERS_CI)里真的删除,本地 wrangler dev/deploy 会跳过。
+# 想手动清理:npm run strip:docs
+[build]
+command = "node tools/strip-docs.js"
+
+# 管理员账号请在 Cloudflare 后台设置(Settings → Variables and Secrets),
+# 或者用 `npx wrangler secret put ADMIN_USER` / `ADMIN_PASS` 写入。
+#
+# 注意:不要把空值写进 [vars] —— 每次部署都会用文件里的值覆盖后台设置,
+# 空的 ADMIN_USER / ADMIN_PASS 会让面板直接锁死(显示「登录功能已关闭」)。
+# 确实想用文件管理的话,取消下面两行注释并填值(提交前记得清掉真实密码):
+# [vars]
+# ADMIN_USER = ""
+# ADMIN_PASS = ""
 
 # ---------------------------------------------------------------------------
 # 需要两个绑定:D1 数据库(DB)和 KV 命名空间(STORE)。

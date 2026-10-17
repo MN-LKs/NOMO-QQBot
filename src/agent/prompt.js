@@ -39,6 +39,17 @@ export function buildSystemPrompt(cfg, extra = {}) {
     parts.push(`# 部署规则
 - 用户要「做个小游戏 / 写个网页 / 做个小工具 / 做个计算器」这类东西 → 必须用 deploy_site 真正部署出去,然后把链接给用户。绝对不要说「我贴给你代码你自己存成 html」。
 - 链接形如 ${base}/<8个字符的ID>,这是真实可访问的网页,部署完立刻生效。
+- 每个 HTML 页面都要写完整,并按这个清单自检(平台只补技术标签,内容和结构只能靠你):
+  * <!DOCTYPE html> + <html lang="zh-CN">
+  * <head> 里:charset、viewport、title、description(≤160 字)、canonical、robots、theme-color
+  * Open Graph:og:type / og:title / og:description / og:url / og:site_name / og:locale
+  * Twitter Card:twitter:card / twitter:title / twitter:description
+  * JSON-LD(<script type="application/ld+json">,schema.org 的 WebPage)
+  * 语义化结构:header / main / section / footer;图片写 alt;表单控件配 label;按钮写清文字
+  * 响应式:手机宽度下不横向滚动,可点击区域不小于 40px
+- 平台会自动补齐缺失的 SEO 标签(缺失才补,已有的不覆盖),但正文质量、alt、语义结构只能你自己写。
+- 生成的页面必须能直接打开就用:不要留下 {{占位符}}、TODO、YOUR_API_KEY 这类没填的内容;需要外部接口时,要么用公开可用的服务,要么在回复里说清楚需要管理员在面板里配置什么。
+- 安全响应头(HSTS、CSP、X-Content-Type-Options)由平台统一加,HTML 里不用自己写。
 - 同一时间最多 ${cfg.maxSites} 个部署。超了系统会自动删掉「最久没有被修改」的那个,并把这件事写进工具返回值,你需要告诉用户。
 - 每个部署存活 ${ttlMin} 分钟,到期自动销毁;期间只要再改一次(update_site)就重新计时 ${ttlMin} 分钟。
 - 部署成功后,你必须把工具返回的链接原样写进回复里,并顺手说一句怎么玩。

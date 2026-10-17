@@ -5,7 +5,9 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 自带一个网页管理面板:AI 接口、联网搜索、APPID/AppSecret、连接方式、群聊权限、部署的项目、日志,
 全部在面板里点几下就能改,不用再碰环境变量。
 
-> 面向大众的部署教程见 [docs/DEPLOY.md](docs/DEPLOY.md) ·
+> 面向大众的部署教程见 [docs/QUICKSTART.md](docs/QUICKSTART.md)(15 分钟,带检查清单) ·
+> 常见问题见 [docs/FAQ.md](docs/FAQ.md) ·
+> 全部功能清单见 [docs/FEATURES.md](docs/FEATURES.md) ·
 > 代码结构与数据流见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
@@ -55,6 +57,8 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 - 空间按「固定保留 + 每项目保底 + 动态池」分配,动态池按访问量优先给忙的项目
 - 到期自动销毁,删除时连同存储与 D1 里的数据一起清干净
 - 页面还能用 `/__data/<键>` 存一点小数据(默认每个项目 256 KB)
+- 自动补齐 SEO / 质量分标签(charset、description、canonical、Open Graph、Twitter Card、JSON-LD、favicon 等),
+  AI 漏写的用默认值,已经写好的不覆盖;裸片段会自动包成完整 HTML
 - 面板里填好**站点域名**后,机器人给你的部署链接就是完整可点的网址
 
 ---
@@ -81,6 +85,21 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 
 ---
 
+## 更新到最新版(OTA)
+
+| 你的部署方式 | 怎么更新 |
+| --- | --- |
+| 连了 GitHub 仓库(推荐) | 往仓库推一次提交,Cloudflare Workers Builds 自动重新构建并部署 |
+| 本地克隆 | `git pull` 后 `npm run deploy` |
+
+- 更新不会动 D1 / KV / R2 里的数据(配置、项目、日志都还在)
+- 构建记录在 CF 后台 → **Deployments**,失败可以回滚到上一个版本
+- 仓库里的 `tools/strip-docs.js` 会在 Cloudflare 构建时清理 README、docs 等
+  描述文件;只在构建环境生效,本地 `wrangler dev/deploy` 不会动你的文件
+
+
+---
+
 ## 在群里怎么用
 
 ```
@@ -102,10 +121,11 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 
 ```bash
 npm install
-npm test                   # 单元测试(纯逻辑,144 项)
+npm run audit              # 静态自检(语法 / import / 脚本 / 文档链接)
+npm test                   # 单元测试(纯逻辑,196 项)
 npm run test:jsmini        # 沙盒 JS 解释器测试(59 项)
-npm run test:integration   # 集成测试(假上游 + 真 Worker 代码,68 项)
-npm run test:all           # 敏感信息扫描 + 上面全部
+npm run test:integration   # 集成测试(假上游 + 真 Worker 代码,84 项)
+npm run test:all           # 静态自检 + 敏感信息扫描 + 上面全部(合计 339 项)
 ```
 
 集成测试会自己起假服务器(QQ 开放平台、大模型接口、MCP 服务器),
@@ -128,7 +148,7 @@ src/
   agent/           AI Agent:模型调用、工具、扩展、技能、MCP、搜索、提示词
   util/            文本、计算、编码等小工具
 test/              单元测试 + 沙盒测试 + 集成测试
-tools/             敏感信息扫描
+tools/             静态自检、敏感信息扫描、部署前描述文件清理
 ```
 
 ## 许可

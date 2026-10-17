@@ -2,13 +2,19 @@
 
 从零到机器人能在群里说话,大概 10 分钟。全程只需要一个 Cloudflare 账号(免费版够用)。
 
+> 第一次部署建议先看 [QUICKSTART](QUICKSTART.md)(带检查清单);
+> 遇到问题先翻 [FAQ](FAQ.md)。
+
 ---
 
 ## 一、创建 Worker 并连上仓库
 
 1. 把本仓库 Fork 到自己的 GitHub(或直接导入)。
 2. Cloudflare 后台 → **Workers & Pages** → **Create** → **Workers** → **Import a repository**。
-3. 选中你的仓库,构建命令留空(默认会跑 `npx wrangler deploy`),部署。
+3. 选中你的仓库,构建配置保持默认:
+   - **Build command**:留空或填 `npm run build`
+   - **Deploy command**:`npx wrangler deploy`
+4. 点部署。
 
 > Worker 名字取自 `wrangler.toml` 里的 `name`(默认 `nomo-qqbot`)。
 > 部署完它的地址形如 `https://nomo-qqbot.<你的账号子域>.workers.dev`。
@@ -56,7 +62,7 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 
 就这两个。其它配置都在面板里填,存进 D1,不会再出现在环境变量里。
 
-> 没配这两个变量时,访问任何地址都会提示你去配,不会白屏。
+> 没配这两个变量时,面板会显示「登录功能已关闭」的锁定页,而不是一个登不进去的表单。
 
 ---
 
@@ -67,7 +73,7 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 - 连续输错 5 次密码,该 IP 会被锁定 15 分钟。
 - 登录状态保存在一个签名 Cookie 里,7 天有效,改密码会让旧登录立刻失效。
 
-登录后会看到五个页面:**首页 / MCP 设置 / 部署项目 / 设置 / 日志**。
+登录后会看到九个页面:**首页 / MCP 设置 / 技能 / 扩展 / 模块 / 部署项目 / 存储 / 设置 / 日志**。
 
 ---
 
@@ -76,6 +82,8 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 进 **设置 → AI 接口**:
 
 1. **接口地址**:填到 `/v1` 那一层,例如 `https://api.example.com/v1`
+   - 不写 `https://` 也行,保存时自动补
+   - 如果不小心粘了完整的 `/chat/completions`,也会自动去掉
 2. **API Key**:填你的密钥
 3. 点 **获取模型列表** → 从下拉里点一个模型,自动填进「模型 ID」
 4. 点 **测试模型**,会弹窗跑两项检查:
@@ -175,6 +183,8 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 | 打开面板提示没配管理员账号 | `ADMIN_USER` / `ADMIN_PASS` 没加,或没重新部署 |
 | 面板能开,但保存设置报错 | `DB` 绑定缺失或名字不对 |
 | 部署项目报「KV 容量」相关错误 | `STORE` 绑定缺失 |
+| 机器人回「管理员还没有配置 AI 接口」 | 面板里的 AI 地址 / Key 没保存成功 |
+| 保存地址后提示「已整理为 …」 | 正常:系统补了协议或去掉了多余后缀 |
 | 机器人不回复 | WebHook 模式:回调没配上或校验失败(见第七节);WebSocket 模式:看首页是否已连接、APPID/AppSecret 是否填错 |
 | 测试模型「基础对话」失败 | 接口地址没填到 `/v1`,或 Key 不对 |
 | 测试模型「工具调用」失败 | 该模型不支持 function calling,换一个 |
@@ -183,3 +193,13 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 | 部署的网页 404 | 项目过期了(默认 10 分钟),或没放 `index.html` |
 
 日志页会记录上面这些环节的每一步,排错先看 **日志** 页面。
+
+---
+
+## 十、更新与回滚
+
+- **连了仓库**:往 GitHub 推一次提交,Cloudflare 自动构建部署(OTA)
+- **本地**:`git pull` 后 `npm run deploy`
+- 更新不会动 D1 / KV / R2 里的数据
+- 构建失败:Workers & Pages → 你的 Worker → **Deployments** → 选上一个成功的版本回滚
+- 想手动验证构建流程:本地 `npm run test:all`,不需要任何线上资源

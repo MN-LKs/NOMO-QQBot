@@ -1,3 +1,4 @@
+import { CSP_PANEL, CSP_SITE } from './config.js';
 import { getProject, bumpHits, dataGet, dataSet, dataDel, dataList } from './store/projects.js';
 import { getFileAuto, mimeFor } from './store/kvfile.js';
 import { bump, bumpDaily } from './store/stats.js';
@@ -56,12 +57,20 @@ function noteView(env, ctx, id) {
 
 export function page(code, msg, status = 404, note = '这个页面由 NOMO-QQBot 临时部署,到期会自动销毁') {
   return new Response(
-    `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
+    `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">`
     + `<title>${code}</title><style>body{font:15px/1.7 -apple-system,"PingFang SC",sans-serif;display:flex;align-items:center;`
     + `justify-content:center;min-height:100vh;margin:0;background:#0f172a;color:#e2e8f0}div{text-align:center;padding:30px}`
     + `b{font-size:17px}h1{font-size:52px;margin:0 0 8px;color:#3b82f6}p{color:#94a3b8;font-size:13px}</style></head>`
     + `<body><div><h1>${code}</h1><b>${msg}</b><p>${note}</p></div></body></html>`,
-    { status, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
+    {
+      status,
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'Content-Security-Policy': CSP_PANEL,
+        'X-Frame-Options': 'DENY',
+      },
+    });
 }
 
 export async function serveSite(env, cfg, request, url, ctx) {
@@ -102,11 +111,17 @@ export async function serveSite(env, cfg, request, url, ctx) {
 
   if (!rest || /\.html?$/i.test(filePath)) noteView(env, ctx, id);
 
+  const ct = mimeFor(filePath);
   const headers = {
-    'Content-Type': mimeFor(filePath),
+    'Content-Type': ct,
     'Cache-Control': 'public, max-age=60',
     'X-Content-Type-Options': 'nosniff',
   };
+  // AI 生成的页面统一挂一个宽松 CSP:允许内联脚本/样式与 https 资源,禁止 http 与插件
+  if (/^text\/html/i.test(ct)) {
+    headers['Content-Security-Policy'] = CSP_SITE;
+    headers['X-Frame-Options'] = 'SAMEORIGIN';
+  }
   if (request.method === 'HEAD') return new Response(null, { headers });
   return new Response(bytes, { headers });
 }

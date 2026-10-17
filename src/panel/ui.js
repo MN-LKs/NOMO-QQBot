@@ -5,6 +5,7 @@ export function loginPage({ error = '', hint = '' } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+<meta name="description" content="NOMO-QQBot 管理面板登录页">
 <title>登录 · NOMO-QQBot 管理面板</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -65,6 +66,43 @@ f.addEventListener('submit',function(e){
 </html>`;
 }
 
+// 管理员账号没配置时,面板不显示登录表单,直接锁死并指路 Q&A。
+export function lockedPage() {
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="description" content="NOMO-QQBot 管理面板:登录功能已关闭">
+<title>登录功能已关闭 · NOMO-QQBot 管理面板</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:14px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0;
+display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.box{width:100%;max-width:420px;background:#1e293b;border:1px solid #334155;border-radius:12px;padding:36px 30px;
+box-shadow:0 20px 50px rgba(0,0,0,.45);text-align:center}
+.ic{font-size:40px;line-height:1;margin-bottom:14px}
+h1{font-size:17px;font-weight:600;margin:0 0 12px}
+p{font-size:13px;color:#94a3b8;margin:0 0 10px}
+a{color:#60a5fa;font-size:13px;text-decoration:none}
+a:hover{text-decoration:underline}
+.foot{margin-top:20px;font-size:12px;color:#64748b}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="ic">🔒</div>
+  <h1>登录功能已关闭</h1>
+  <p>这个实例还没有设置管理员账号,面板暂时无法登录。</p>
+  <p>在 Cloudflare 后台为本项目配置管理员账号后,刷新本页即可恢复。</p>
+  <a href="https://github.com/MN-LKs/NOMO-QQBot/blob/main/docs/FAQ.md" target="_blank" rel="noopener">查看 Q&A:怎么恢复登录 →</a>
+  <div class="foot">NOMO-QQBot 管理面板</div>
+</div>
+</body>
+</html>`;
+}
+
 export function esc(s) {
   return String(s === null || s === undefined ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -78,6 +116,7 @@ export function panelPage({ user = '' } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
+<meta name="description" content="NOMO-QQBot 管理面板:机器人、部署项目、存储与日志">
 <title>NOMO-QQBot 管理面板</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -608,7 +647,7 @@ function jparse(t,fb){try{return t.trim()?JSON.parse(t):fb}catch(e){toast('请�
 function bindSettings(v){
  function save(patch,btn){
   if(btn){btn.disabled=true;var t=btn.textContent;btn.textContent='保存中…'}
-  api('/settings',{method:'POST',body:patch}).then(function(){toast('已保存');S.settings=null;loadSettings(true)})
+  api('/settings',{method:'POST',body:patch}).then(function(r){toast(r&&r.note?r.note:'已保存');S.settings=null;loadSettings(true)})
    .catch(function(e){toast(e.message)})
    .then(function(){if(btn){btn.disabled=false;btn.textContent=t}});
  }
