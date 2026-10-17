@@ -75,7 +75,7 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 4. 在 **Settings → Variables and Secrets** 里加两个 **Secret**:
    - `ADMIN_USER` 面板用户名
    - `ADMIN_PASS` 面板密码(请用长一点的)
-   仓库已开启 `keep_vars = true`,以后部署不会清掉它们
+   仓库已开启 `keep_vars = true`;如果 `[vars]` 里有迁移用空值,填完值后要删掉
 5. 部署完成后打开 `https://<你的域名>/administrator`,用上面那对账号登录
 6. 在面板的**设置**里填:AI 接口(地址 + Key + 模型)、QQ 的 APPID 与 AppSecret
 7. 连接方式保持 **WebHook**(默认),把面板算好的回调地址填到 QQ 开放平台;
