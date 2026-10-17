@@ -4,6 +4,9 @@ import { executeTool } from './exec.js';
 import { buildSystemPrompt } from './prompt.js';
 import { truncate, clipMiddle } from '../util/text.js';
 import { mcpToolDefs, callMcp } from './mcp.js';
+import { listSkills, pickSkills } from './skills.js';
+import { loadExts, enabledToolSet, externalToolDefs, runExternalTool } from './exts.js';
+import { listModules, agentModules, siteModules } from '../store/modules.js';
 
 export async function runAgent({ cfg, core, convId, userText, meta = {}, log = console.log }) {
   const started = Date.now();
@@ -18,11 +21,34 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
   } catch {
     mcp = { defs: [], map: new Map() };
   }
-  const tools = [...buildTools(cfg), ...mcp.defs];
-  const ctx = { cfg, core, convId };
+
+  // 扩展(内置开关/外部扩展)、技能、预制后端模块:任何一步失败都不挡主流程,
+  // 退化成「内置工具全开、无技能、无模块」。
+  let skills = [];
+  let toolSet = null;
+  let extTools = { defs: [], map: new Map() };
+  let modules = [];
+  let prefabList = [];
+  try {
+    const [skillRows, extState, moduleRows] = await Promise.all([
+      listSkills(core.env, { enabledOnly: true }),
+      loadExts(core.env),
+      listModules(core.env, { enabledOnly: true }),
+    ]);
+    skills = pickSkills(skillRows, userText, cfg.skillMaxInject || 6000);
+    toolSet = enabledToolSet(extState);
+    extTools = externalToolDefs(extState);
+    modules = agentModules(moduleRows);
+    prefabList = siteModules(moduleRows).map((m) => ({ id: m.id, name: m.name, description: m.description }));
+  } catch {
+    /* 加载失败:用默认值 */
+  }
+
+  const tools = [...buildTools(cfg, { toolSet, modules, prefabList, externalDefs: extTools.defs }), ...mcp.defs];
+  const ctx = { cfg, core, convId, modules: new Map(modules.map((m) => [m.id, m])), log };
 
   const conv = await core.getContext(convId);
-  const messages = [{ role: 'system', content: buildSystemPrompt(cfg, meta) }];
+  const messages = [{ role: 'system', content: buildSystemPrompt(cfg, { ...meta, skills, prefabList }) }];
 
   if (conv.summary) {
     messages.push({ role: 'system', content: `以下是这个群之前聊天的摘要,作为背景参考:\n${conv.summary}` });
@@ -95,7 +121,11 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
         args = {};
       }
       const m = mcp.map.get(name);
-      const result = m ? await callMcp(core.env, m.serverId, m.tool, args) : await executeTool(name, args, ctx);
+      const em = extTools.map.get(name);
+      let result;
+      if (m) result = await callMcp(core.env, m.serverId, m.tool, args);
+      else if (em) result = await runExternalTool(em, args, (msg) => log(`[扩展] ${msg}`));
+      else result = await executeTool(name, args, ctx);
       return { name, args, result: String(result) };
     }));
 

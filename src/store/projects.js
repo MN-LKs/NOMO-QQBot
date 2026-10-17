@@ -3,8 +3,18 @@ import { ensureSchema, all, one, run, dayKey } from './db.js';
 import { putFile, delAll, mimeFor } from './kvfile.js';
 import { bump, bumpDaily, todayCount } from './stats.js';
 
+// 部署总容量 = 各启用存储的容量上限之和(没配置过就按 KV 免费额度 1 GB 估算)
+function storageTotal(settings) {
+  const stores = Array.isArray(settings?.storage?.stores) ? settings.storage.stores : [];
+  let sum = 0;
+  for (const s of stores) {
+    if (s && s.enabled !== false && Number(s.maxBytes) > 0) sum += Number(s.maxBytes);
+  }
+  return sum > 0 ? sum : KV_TOTAL_BYTES;
+}
+
 export function quotaOf(settings) {
-  const total = KV_TOTAL_BYTES;
+  const total = storageTotal(settings);
   const reserve = Math.max(0, Number(settings?.deploy?.reserveBytes) || 0);
   const per = Math.max(1024 * 1024, Number(settings?.deploy?.perProjectBytes) || 1);
   const capacity = Math.max(1, Math.floor((total - reserve) / per));

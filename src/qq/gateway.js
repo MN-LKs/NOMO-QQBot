@@ -31,7 +31,7 @@ export async function wsStart(core, { force = false } = {}) {
   try {
     const token = await core.getToken(true);
     const infoRes = await fetch(cfg.gatewayUrl, {
-      headers: { Authorization: `QQBot ${token}`, 'User-Agent': 'NPAPI/3.0' },
+      headers: { Authorization: `QQBot ${token}`, 'User-Agent': 'NOMO-QQBot/4.0' },
     });
     const info = await infoRes.json().catch(() => ({}));
     if (!info.url) throw new Error(`获取网关地址失败 HTTP ${infoRes.status} ${JSON.stringify(info).slice(0, 200)}`);

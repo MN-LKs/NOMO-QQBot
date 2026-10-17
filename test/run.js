@@ -8,6 +8,10 @@ import { chunkText, toPlainText, truncate, clipMiddle } from '../src/util/text.j
 import { calc, formatNumber } from '../src/util/calc.js';
 import { handleFrame, wsStatus, wsClose } from '../src/qq/gateway.js';
 import { panelPage, loginPage } from '../src/panel/ui.js';
+import { BUILTIN_EXTS, enabledToolSet, safeToolName, externalToolDefs } from '../src/agent/exts.js';
+import { pickSkills, parseSkillDoc, parseTriggers } from '../src/agent/skills.js';
+import { resolveStores, availability } from '../src/store/storage.js';
+import { uriEncode, sha256Hex } from '../src/store/s3.js';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 
@@ -36,7 +40,8 @@ eq('deepMerge 空补丁不动', deepMerge({ a: 1 }, null), { a: 1 });
 
 const env1 = { ADMIN_USER: 'admin', ADMIN_PASS: 'pw12345678' };
 const cfg1 = flatten(DEFAULT_SETTINGS, env1);
-eq('默认连接方式是 websocket', cfg1.mode, 'websocket');
+eq('默认连接方式是 webhook', cfg1.mode, 'webhook');
+eq('可以切回 websocket', flatten(deepMerge(DEFAULT_SETTINGS, { qq: { mode: 'websocket' } }), env1).mode, 'websocket');
 eq('默认模型', cfg1.llmModel, 'deepseek-v4.1-flash');
 eq('默认最多 5 个项目', cfg1.maxSites, 5);
 eq('默认存活 600 秒', cfg1.siteTtlSeconds, 600);
@@ -75,11 +80,40 @@ eq('搜索条数可调', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results
 eq('搜索条数上限夹到 10', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results: 99 } }), env1).searchResults, 10);
 eq('搜索条数负数夹到 1', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results: -3 } }), env1).searchResults, 1);
 eq('搜索条数 0 回落默认', flatten(deepMerge(DEFAULT_SETTINGS, { search: { results: 0 } }), env1).searchResults, 5);
-eq('网页查询 API 默认空', cfgA.extractUrl, '');
-eq('网页查询地址去尾斜杠', flatten(deepMerge(DEFAULT_SETTINGS, { extract: { url: 'https://r.example.com/api/' } }), env1).extractUrl, 'https://r.example.com/api');
-eq('网页查询 format 透传', flatten(deepMerge(DEFAULT_SETTINGS, { extract: { format: 'json' } }), env1).extractFormat, 'json');
+eq('搜索/读取接口默认空', cfgA.searchApiUrl, '');
+eq('搜索/读取接口默认空(读取)', cfgA.readerApiUrl, '');
+const cfgE = flatten(deepMerge(DEFAULT_SETTINGS, { search: { baseUrl: 'https://r.example.com/v1/' } }), env1);
+eq('baseUrl 推导出搜索端点', cfgE.searchApiUrl, 'https://r.example.com/v1/search');
+eq('baseUrl 推导出读取端点', cfgE.readerApiUrl, 'https://r.example.com/v1/reader');
+eq('baseUrl 带 /search 后缀会剥离', flatten(deepMerge(DEFAULT_SETTINGS, { search: { baseUrl: 'https://r.example.com/v1/search' } }), env1).searchApiUrl, 'https://r.example.com/v1/search');
+eq('自定义路径', flatten(deepMerge(DEFAULT_SETTINGS, { search: { baseUrl: 'https://r.example.com', searchPath: '/s', readerPath: '/r' } }), env1).readerApiUrl, 'https://r.example.com/r');
+eq('读取 format 透传', flatten(deepMerge(DEFAULT_SETTINGS, { search: { readerFormat: 'json' } }), env1).searchReaderFormat, 'json');
 eq('中转站面板默认地址', cfgA.dashboardUrl, 'https://manage.nexacode.dpdns.org/api/dashboard');
 eq('中转站面板可清空', flatten(deepMerge(DEFAULT_SETTINGS, { dashboard: { url: '' } }), env1).dashboardUrl, '');
+
+// ---------- 扩展 / 技能 / 存储 ----------
+const tset = enabledToolSet({ builtin: BUILTIN_EXTS.map((b) => ({ ...b, enabled: true })), external: [] });
+ok('内置扩展含会话记忆', ['remember', 'recall', 'forget'].every((t) => tset.has(t)));
+ok('内置扩展含群聊工具', tset.has('group_recent') && tset.has('group_find'));
+ok('内置扩展含基础工具', ['calc', 'now', 'web_search', 'fetch_url', 'random', 'encode', 'query_dashboard'].every((t) => tset.has(t)));
+ok('关掉一个扩展后其工具消失', !enabledToolSet({ builtin: [{ id: 'dice', tools: ['random'], enabled: false }] }).has('random'));
+eq('外置工具名会加前缀并清洗', safeToolName('my ext', 'do.thing'), 'x_my_ext_do_thing');
+const exDefs = externalToolDefs({ external: [{ id: 'e1', name: 'E', enabled: true, config: { tools: [{ name: 'ping', endpoint: 'https://x/y' }] } }] });
+eq('外置扩展生成工具定义', exDefs.defs.length, 1);
+ok('外置扩展查找表可用', exDefs.map.has(exDefs.defs[0].function.name));
+eq('技能触发词解析', parseTriggers('甲, 乙 丙'), ['甲', '乙', '丙']);
+eq('触发词命中才注入', pickSkills([{ name: 'A', content: 'aaa', enabled: true, triggers: ['菠萝'] }], '菠萝好吃吗', 6000).length, 1);
+eq('触发词不命中不注入', pickSkills([{ name: 'A', content: 'aaa', enabled: true, triggers: ['菠萝'] }], '苹果好吃吗', 6000).length, 0);
+eq('无触发词=总是注入', pickSkills([{ name: 'A', content: 'aaa', enabled: true, triggers: [] }], '随便', 6000).length, 1);
+const skillDoc = parseSkillDoc('---\nname: 测试\ndescription: 说明\ntriggers: x, y\n---\n正文内容');
+eq('SKILL.md frontmatter 解析', [skillDoc.name, skillDoc.description, skillDoc.triggers.join('|'), skillDoc.content], ['测试', '说明', 'x|y', '正文内容']);
+const rs = resolveStores({ storage: { stores: [] } }, { R2: {}, STORE: {} });
+eq('自动识别 R2 与 KV', rs.map((s) => s.id), ['r2', 'kv']);
+ok('R2 默认优先级更高', rs[0].priority > rs[1].priority);
+ok('R2 绑定可用', availability({ R2: {} }, rs[0]).ok);
+ok('绑定缺失时不可用', !availability({}, rs[0]).ok);
+eq('URI 编码保留斜杠选项', [uriEncode('a b/c', false), uriEncode('a b/c', true)], ['a%20b%2Fc', 'a%20b/c']);
+eq('sha256 已知向量', await sha256Hex('abc'), 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
 
 // ---------- 登录鉴权 ----------
 ok('密码正确', checkCredentials(env1, 'admin', 'pw12345678'));
@@ -247,7 +281,7 @@ function extractScripts(html) {
   ok('正则里的反斜杠没有被模板字符串吃掉', extractScripts(panel).includes('/^#\\/?/'));
   ok('换行转义还在', extractScripts(panel).includes("join('\\n')"));
   for (const [name, code] of [['panel', extractScripts(panel)], ['login', extractScripts(loginPage({}))]]) {
-    const f = `/tmp/npapi-ui-${name}.js`;
+    const f = `/tmp/nomo-ui-${name}.js`;
     fs.writeFileSync(f, code);
     try {
       execFileSync(process.execPath, ['--check', f], { stdio: 'pipe' });

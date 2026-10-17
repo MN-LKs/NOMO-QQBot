@@ -1,9 +1,32 @@
-export function buildTools(cfg) {
+// 工具清单构建:
+//   - 部署类工具受「Agent 设置 → 架构」控制(纯HTML / 预制后端JS / 后端JS编写,全不选则关闭)
+//   - 内置工具受「扩展管理」里的开关控制
+//   - 预制后端JS模块(调用点含 agent 的)自动变成工具
+//   - 外置扩展定义的工具也并进来
+
+export function buildTools(cfg, extras = {}) {
   const maxSites = cfg.maxSites;
   const ttlMin = Math.round(cfg.siteTtlSeconds / 60);
+  const toolSet = extras.toolSet || null; // null = 全开(加载扩展失败时的兜底)
+  const modules = Array.isArray(extras.modules) ? extras.modules : [];
+  const externalDefs = Array.isArray(extras.externalDefs) ? extras.externalDefs : [];
 
-  return [
-    {
+  const on = (name) => (toolSet ? toolSet.has(name) : true);
+  const out = [];
+
+  // ---------- 部署类(受架构开关控制) ----------
+  if (cfg.canDeploy) {
+    let backendNote = '';
+    if (cfg.canPrefab && extras.prefabList && extras.prefabList.length) {
+      backendNote += ' 平台有管理员预制的后端接口可用:页面里直接 fetch("/api/<模块id>", {method:"POST", body:JSON.stringify(数据)}) 就能调用,'
+        + `当前可用模块:${extras.prefabList.map((m) => `${m.id}(${m.name})`).join('、')}。`;
+    }
+    if (cfg.canCustomBackend) {
+      backendNote += ' 需要自定义后端时,在 files 里加一个 _backend.js:里面直接写语句,可以用 ctx.method / ctx.path / ctx.query / ctx.body / ctx.json() / '
+        + 'ctx.store.get(k) / ctx.store.set(k,v) / ctx.fetch(url) / ctx.log(...),用 return 返回结果(对象会按 JSON 返回,也可以 return {status, contentType, body})。'
+        + '页面通过 fetch("/api/任意路径") 调用它。注意这是沙盒 JS:支持 let/const、if/for/while、函数、模板字符串、数组对象等常用语法,不支持 import/class。';
+    }
+    out.push({
       type: 'function',
       function: {
         name: 'deploy_site',
@@ -14,7 +37,8 @@ export function buildTools(cfg) {
           'files 里至少要有一个 index.html;可以额外放 style.css、app.js 等。' +
           '前端可以用 fetch("./__data/<键>") 做 GET、用 fetch("./__data/<键>",{method:"POST",body:"..."}) 做 POST,' +
           '来把数据存在服务端(适合排行榜、存档),这是本平台内置的简易后端。' +
-          `同一时间最多存在 ${maxSites} 个部署,超了会自动删掉最久没改动的那一个;` +
+          backendNote +
+          `同一时间最多存在 ${maxSites} 个部署;` +
           `每个部署 ${ttlMin} 分钟后自动销毁,期间只要再改一次就会重新计时。` +
           '部署成功后必须把返回的链接原样告诉用户。',
         parameters: {
@@ -38,14 +62,14 @@ export function buildTools(cfg) {
           required: ['name', 'files'],
         },
       },
-    },
-    {
+    });
+    out.push({
       type: 'function',
       function: {
         name: 'update_site',
         description:
-          '修改一个已经部署的网页。只传要改的文件即可,同名文件会被覆盖,没提到的文件保持原样。' +
-          '修改成功会重置该站点的销毁倒计时。',
+          '修改一个已经部署的网页。只传要改的文件即可,同名文件会被覆盖,没提到的文件保持原样。'
+          + '修改成功会重置该站点的销毁倒计时。',
         parameters: {
           type: 'object',
           properties: {
@@ -67,7 +91,10 @@ export function buildTools(cfg) {
           required: ['id', 'files'],
         },
       },
-    },
+    });
+  }
+
+  out.push(
     {
       type: 'function',
       function: {
@@ -103,7 +130,11 @@ export function buildTools(cfg) {
         },
       },
     },
-    {
+  );
+
+  // ---------- 联网 ----------
+  if (on('web_search')) {
+    out.push({
       type: 'function',
       function: {
         name: 'web_search',
@@ -117,8 +148,10 @@ export function buildTools(cfg) {
           required: ['query'],
         },
       },
-    },
-    {
+    });
+  }
+  if (on('fetch_url')) {
+    out.push({
       type: 'function',
       function: {
         name: 'fetch_url',
@@ -132,8 +165,12 @@ export function buildTools(cfg) {
           required: ['url'],
         },
       },
-    },
-    {
+    });
+  }
+
+  // ---------- 中转站用量 ----------
+  if (on('query_dashboard')) {
+    out.push({
       type: 'function',
       function: {
         name: 'query_dashboard',
@@ -141,44 +178,85 @@ export function buildTools(cfg) {
           + '用户问「还剩多少额度」「中转站用量」「今天用了多少」时用。',
         parameters: { type: 'object', properties: {} },
       },
-    },
-    {
+    });
+  }
+
+  // ---------- 群聊记忆 ----------
+  if (on('group_recent')) {
+    out.push({
       type: 'function',
       function: {
-        name: 'remember',
-        description: '把一条信息长期记住(比如群规、某人的偏好、约好的时间)。'
-          + '记住之后,以后这个会话的每次对话都会自动带上它。用户说「记住 xxx」「以后都 xxx」时用。',
+        name: 'group_recent',
+        description: '查看某个群最近的聊天消息(来自机器人收到的消息缓存)。用户问「最近群里聊了什么」「刚才谁说了 xxx」时用。',
         parameters: {
           type: 'object',
           properties: {
-            key: { type: 'string', description: '简短的名字,例如「群活动时间」' },
-            value: { type: 'string', description: '具体内容,例如「每周五晚八点开黑」' },
+            group: { type: 'string', description: '可选,群名或群 openID;不填就是当前群' },
+            limit: { type: 'integer', description: '看多少条,默认 20,最多 50' },
           },
-          required: ['key', 'value'],
         },
       },
-    },
-    {
+    });
+  }
+  if (on('group_find')) {
+    out.push({
       type: 'function',
       function: {
-        name: 'recall',
-        description: '查看这个会话已经记住的全部内容。用户问「你记得什么」时用。',
-        parameters: { type: 'object', properties: {} },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'forget',
-        description: '忘掉一条之前记住的信息。用户说「忘掉 xxx」「不用记着了」时用。',
+        name: 'group_find',
+        description: '按关键词查找机器人见过的群聊(按群名或 openID 匹配),返回群 ID、消息量和最近活跃时间。'
+          + '用户问「找一下那个讲 xx 的群」时用。',
         parameters: {
           type: 'object',
-          properties: { key: { type: 'string', description: '要忘掉的那条的名字' } },
-          required: ['key'],
+          properties: { keyword: { type: 'string', description: '关键词' } },
+          required: ['keyword'],
         },
       },
-    },
-    {
+    });
+  }
+
+  // ---------- 通用小工具 ----------
+  if (on('remember')) {
+    out.push(
+      {
+        type: 'function',
+        function: {
+          name: 'remember',
+          description: '把一条信息长期记住(比如群规、某人的偏好、约好的时间)。'
+            + '记住之后,以后这个会话的每次对话都会自动带上它。用户说「记住 xxx」「以后都 xxx」时用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              key: { type: 'string', description: '简短的名字,例如「群活动时间」' },
+              value: { type: 'string', description: '具体内容,例如「每周五晚八点开黑」' },
+            },
+            required: ['key', 'value'],
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'recall',
+          description: '查看这个会话已经记住的全部内容。用户问「你记得什么」时用。',
+          parameters: { type: 'object', properties: {} },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'forget',
+          description: '忘掉一条之前记住的信息。用户说「忘掉 xxx」「不用记着了」时用。',
+          parameters: {
+            type: 'object',
+            properties: { key: { type: 'string', description: '要忘掉的那条的名字' } },
+            required: ['key'],
+          },
+        },
+      },
+    );
+  }
+  if (on('random')) {
+    out.push({
       type: 'function',
       function: {
         name: 'random',
@@ -198,8 +276,10 @@ export function buildTools(cfg) {
           },
         },
       },
-    },
-    {
+    });
+  }
+  if (on('encode')) {
+    out.push({
       type: 'function',
       function: {
         name: 'encode',
@@ -218,8 +298,10 @@ export function buildTools(cfg) {
           required: ['action', 'text'],
         },
       },
-    },
-    {
+    });
+  }
+  if (on('calc')) {
+    out.push({
       type: 'function',
       function: {
         name: 'calc',
@@ -230,8 +312,10 @@ export function buildTools(cfg) {
           required: ['expression'],
         },
       },
-    },
-    {
+    });
+  }
+  if (on('now')) {
+    out.push({
       type: 'function',
       function: {
         name: 'now',
@@ -243,99 +327,137 @@ export function buildTools(cfg) {
           },
         },
       },
-    },
-      ...SANDBOX_TOOLS,
-  ];
+    });
+  }
+
+  // ---------- 沙盒(属于部署工作流) ----------
+  if (cfg.canDeploy) {
+    out.push(...sandboxTools());
+  }
+
+  // ---------- 预制后端JS模块(调用点含 agent) ----------
+  for (const m of modules) {
+    out.push(moduleToolDef(m));
+  }
+
+  // ---------- 外置扩展工具 ----------
+  out.push(...externalDefs);
+
+  return out;
 }
 
-const SANDBOX_TOOLS = [
-  {
+function moduleToolDef(m) {
+  const props = {};
+  const required = [];
+  const params = m.params && typeof m.params === 'object' ? m.params : {};
+  for (const [name, def] of Object.entries(params)) {
+    const d = def && typeof def === 'object' ? def : {};
+    props[name] = {
+      type: d.type || 'string',
+      description: String(d.description || ''),
+    };
+    if (d.required) required.push(name);
+  }
+  return {
     type: 'function',
     function: {
-      name: 'fs_write',
-      description: '在沙盒里创建或覆盖一个文件。沙盒是给你写代码用的草稿区(2 MB 上限),不会对外公开;'
-        + '想让人看到要用 fs_deploy 或 deploy_site 部署出去。适合先写好几个文件再一起部署。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径,例如 index.html 或 css/style.css' },
-          content: { type: 'string', description: '文件完整内容' },
-        },
-        required: ['path', 'content'],
-      },
+      name: m.id,
+      description: `[预制后端JS] ${String(m.description || m.name || m.id).slice(0, 400)}`,
+      parameters: { type: 'object', properties: props, required },
     },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fs_read',
-      description: '读取沙盒里某个文件的内容。改代码之前先看一遍。',
-      parameters: {
-        type: 'object',
-        properties: { path: { type: 'string', description: '文件路径' } },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fs_list',
-      description: '列出沙盒里有哪些文件,以及每个文件的大小。',
-      parameters: {
-        type: 'object',
-        properties: { path: { type: 'string', description: '可选,只看某个目录下的文件' } },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fs_edit',
-      description: '在沙盒文件里做局部替换。适合只改几行,不用把整个文件重写一遍。',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: { type: 'string', description: '文件路径' },
-          find: { type: 'string', description: '要被替换掉的原文本(必须和文件里完全一致)' },
-          replace: { type: 'string', description: '替换成什么' },
-        },
-        required: ['path', 'find', 'replace'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fs_delete',
-      description: '删掉沙盒里的一个文件。',
-      parameters: {
-        type: 'object',
-        properties: { path: { type: 'string', description: '文件路径' } },
-        required: ['path'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'fs_deploy',
-      description: '把沙盒里的文件直接部署成公开网页,返回链接。'
-        + '不填 paths 就部署沙盒里的全部文件;必须包含 index.html。',
-      parameters: {
-        type: 'object',
-        properties: {
-          name: { type: 'string', description: '项目名,中英文数字都行' },
-          description: { type: 'string', description: '一句话说明' },
-          dir: { type: 'string', description: '可选,只部署某个目录下的文件' },
-          paths: {
-            type: 'array',
-            description: '可选,只部署这些文件',
-            items: { type: 'string' },
+  };
+}
+
+function sandboxTools() {
+  return [
+    {
+      type: 'function',
+      function: {
+        name: 'fs_write',
+        description: '在沙盒里创建或覆盖一个文件。沙盒是给你写代码用的草稿区(2 MB 上限),不会对外公开;'
+          + '想让人看到要用 fs_deploy 或 deploy_site 部署出去。适合先写好几个文件再一起部署。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '文件路径,例如 index.html 或 css/style.css' },
+            content: { type: 'string', description: '文件完整内容' },
           },
+          required: ['path', 'content'],
         },
-        required: ['name'],
       },
     },
-  },
-];
+    {
+      type: 'function',
+      function: {
+        name: 'fs_read',
+        description: '读取沙盒里某个文件的内容。改代码之前先看一遍。',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string', description: '文件路径' } },
+          required: ['path'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'fs_list',
+        description: '列出沙盒里有哪些文件,以及每个文件的大小。',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string', description: '可选,只看某个目录下的文件' } },
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'fs_edit',
+        description: '在沙盒文件里做局部替换。适合只改几行,不用把整个文件重写一遍。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '文件路径' },
+            find: { type: 'string', description: '要被替换掉的原文本(必须和文件里完全一致)' },
+            replace: { type: 'string', description: '替换成什么' },
+          },
+          required: ['path', 'find', 'replace'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'fs_delete',
+        description: '删掉沙盒里的一个文件。',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string', description: '文件路径' } },
+          required: ['path'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'fs_deploy',
+        description: '把沙盒里的文件直接部署成公开网页,返回链接。'
+          + '不填 paths 就部署沙盒里的全部文件;必须包含 index.html。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '项目名,中英文数字都行' },
+            description: { type: 'string', description: '一句话说明' },
+            dir: { type: 'string', description: '可选,只部署某个目录下的文件' },
+            paths: {
+              type: 'array',
+              description: '可选,只部署这些文件',
+              items: { type: 'string' },
+            },
+          },
+          required: ['name'],
+        },
+      },
+    },
+  ];
+}

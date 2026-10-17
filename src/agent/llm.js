@@ -1,4 +1,4 @@
-const UA = 'NPAPI/1.0';
+const UA = 'NOMO-QQBot/4.0';
 const REASONING_HEAD_MAX = 1500;
 
 export class UpstreamError extends Error {

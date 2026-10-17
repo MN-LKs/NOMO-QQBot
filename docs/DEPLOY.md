@@ -10,19 +10,21 @@
 2. Cloudflare 后台 → **Workers & Pages** → **Create** → **Workers** → **Import a repository**。
 3. 选中你的仓库,构建命令留空(默认会跑 `npx wrangler deploy`),部署。
 
-> Worker 名字取自 `wrangler.toml` 里的 `name`(默认 `npapi`)。
-> 部署完它的地址形如 `https://npapi.<你的账号子域>.workers.dev`。
+> Worker 名字取自 `wrangler.toml` 里的 `name`(默认 `nomo-qqbot`)。
+> 部署完它的地址形如 `https://nomo-qqbot.<你的账号子域>.workers.dev`。
 
 ---
 
 ## 二、创建并绑定 D1 与 KV
 
 这两个是必须的:**D1** 存配置、日志、统计、项目清单;**KV** 存部署出来的网页文件。
+可选再绑一个 **R2 存储桶**:绑上之后部署文件会优先存 R2(免费额度 10 GB),KV 退居缓存。
 
 ### 1. 创建
 
-- Cloudflare 后台 → **Storage & Databases** → **D1** → **Create database**,名字填 `npapi`
-- 同一页 → **KV** → **Create namespace**,名字填 `npapi-store`
+- Cloudflare 后台 → **Storage & Databases** → **D1** → **Create database**,名字填 `nomo-qqbot`
+- 同一页 → **KV** → **Create namespace**,名字填 `nomo-qqbot-store`
+- (可选)同一页 → **R2** → **Create bucket**,名字填 `nomo-qqbot`
 
 ### 2. 绑定
 
@@ -30,8 +32,9 @@
 
 | 类型 | 变量名(Variable name) | 选什么 |
 | --- | --- | --- |
-| D1 database | **`DB`** | 刚建的 `npapi` |
-| KV namespace | **`STORE`** | 刚建的 `npapi-store` |
+| D1 database | **`DB`** | 刚建的 `nomo-qqbot` |
+| KV namespace | **`STORE`** | 刚建的 `nomo-qqbot-store` |
+| R2 bucket(可选) | **`R2`** | 刚建的 `nomo-qqbot` |
 
 > 变量名必须是 `DB` 和 `STORE`,大小写都不能改。
 > 如果你更习惯用 `wrangler.toml` 管理,把 `wrangler.toml` 里那两段注释打开、填上 ID 也行。
@@ -82,6 +85,19 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 5. 推理等级按需选(默认 `max`),深度思考默认开启
 6. **保存**
 
+### 顺带把联网搜索也配上(可选)
+
+同一页往下是**联网搜索**卡片:
+
+1. **接口地址 Base URL**:填到 `/v1` 那一层,例如 `https://api.example.com/v1`;
+   关键词搜索会自动走 `/search`,网页读取会自动走 `/reader`(路径不合适可以改)
+2. **API Key**:填密钥
+3. 点 **测试搜索与读取**:弹窗里会同时跑一遍关键词搜索和网页读取,带原始返回片段,方便排查
+4. 支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别;
+   识别不出的服务商走通用模式,返回结构和读取字段也能在「返回结构映射」里手动指定
+
+不配也能用,机器人只是不能联网。
+
 ## 六、在面板里配置 QQ 机器人
 
 还在 **设置** 页面往下:
@@ -89,8 +105,10 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 1. 填 **APPID** 和 **App Secret**(在 QQ 机器人管理端 → 开发设置 → 机器人资料里找)
 2. **运行环境**:机器人已经上线选「正式环境」;还在开发调试选「沙箱环境」
    (沙箱只会收到开放平台里配置过的沙箱账号的事件,且沙箱暂不支持群聊)
-3. **连接方式** 选 **WebSocket**(推荐)
-4. 点 **保存并应用**。首页的「系统信息」里应该显示已连接
+3. **连接方式** 保持 **WebHook**(默认)。面板会把回调地址算好,复制到
+   QQ 机器人管理端 → **开发设置 → 回调配置**(详细步骤见第七节);
+   不想配回调的话就切成 **WebSocket**
+4. 点 **保存并应用**
 
 > 接口域名已经按官方文档写死:取 token 走 `bots.qq.com`,
 > 正式环境走 `api.sgroup.qq.com`,沙箱走 `sandbox.api.sgroup.qq.com`,不需要你填。
@@ -99,22 +117,14 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 
 ## 七、连接方式怎么选
 
-### WebSocket(默认,推荐)
+### WebHook(默认)
 
-- 机器人主动连腾讯的网关,**不需要**在开放平台填任何回调地址
-- 公网不暴露入口,别人扫不到你的机器人后台,也没法拿你的地址刷请求
-- 断线自动重连,另外每 2 分钟有一次兜底检查
-- 注意:这种方式下 Worker 会长期保持一个连接,会消耗 Cloudflare 免费额度里的
-  Durable Object 时长(24 小时大约占掉八成),日常够用,但别再多开常驻 DO
-
-### WebHook(可选)
-
-需要去开放平台填回调地址时用。面板会自动把地址算好(「设置 → QQ 机器人 → 回调地址」),
-复制到 [QQ 机器人管理端](https://q.qq.com/qqbot) → **开发设置 → 回调配置**,监听事件至少勾上:
-
-- `GROUP_AT_MESSAGE_CREATE`(群里 @ 机器人)
-- `C2C_MESSAGE_CREATE`(单聊)
-- `GROUP_ADD_ROBOT`(被拉进群)
+- 腾讯把消息推到你的 Worker;没人说话时 Durable Object 完全休眠,不占 Cloudflare 额度
+- 需要去开放平台填回调地址:面板会自动把地址算好(「设置 → QQ 机器人 → 回调地址」),
+  复制到 [QQ 机器人管理端](https://q.qq.com/qqbot) → **开发设置 → 回调配置**,监听事件至少勾上:
+  - `GROUP_AT_MESSAGE_CREATE`(群里 @ 机器人)
+  - `C2C_MESSAGE_CREATE`(单聊)
+  - `GROUP_ADD_ROBOT`(被拉进群)
 
 保存时腾讯会发一个 `op=13` 的验证请求,本项目会用 AppSecret 自动签名回应,正常会直接通过。
 
@@ -132,7 +142,15 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 > 2. 加一条 WAF 规则跳过:`(http.host eq "你的域名" and starts_with(http.request.uri.path, "/qq/webhook"))`
 > 3. 换个干净的域名专门跑回调
 >
-> 不想折腾这些,直接用 **WebSocket** 模式就好,压根不需要回调地址。
+> 不想折腾这些,直接切到 **WebSocket** 模式就好,压根不需要回调地址。
+
+### WebSocket(可选)
+
+- 机器人主动连腾讯的网关,**不需要**在开放平台填任何回调地址
+- 公网不暴露入口,别人扫不到你的机器人后台,也没法拿你的地址刷请求
+- 断线自动重连,另外每 2 分钟有一次兜底检查
+- 注意:这种方式下 Worker 会长期保持一个连接,会消耗 Cloudflare 免费额度里的
+  Durable Object 时长(24 小时大约占掉八成),日常够用,但别再多开常驻 DO
 
 ---
 
@@ -157,7 +175,7 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 | 打开面板提示没配管理员账号 | `ADMIN_USER` / `ADMIN_PASS` 没加,或没重新部署 |
 | 面板能开,但保存设置报错 | `DB` 绑定缺失或名字不对 |
 | 部署项目报「KV 容量」相关错误 | `STORE` 绑定缺失 |
-| 机器人不回复,首页显示未连接 | APPID/AppSecret 填错,或 AppSecret 里有空格 |
+| 机器人不回复 | WebHook 模式:回调没配上或校验失败(见第七节);WebSocket 模式:看首页是否已连接、APPID/AppSecret 是否填错 |
 | 测试模型「基础对话」失败 | 接口地址没填到 `/v1`,或 Key 不对 |
 | 测试模型「工具调用」失败 | 该模型不支持 function calling,换一个 |
 | 群里 @ 没反应,日志里有「不在白名单」 | 群没授权,去「设置 → 群聊权限」加它,或打开允许所有群聊 |

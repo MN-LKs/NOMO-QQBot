@@ -1,4 +1,4 @@
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export const DDL = [
   `CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)`,
@@ -38,6 +38,22 @@ export const DDL = [
      id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL,
      level TEXT NOT NULL, tag TEXT, msg TEXT NOT NULL)`,
   `CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(ts)`,
+  `CREATE TABLE IF NOT EXISTS stusage (
+     store_id TEXT PRIMARY KEY, bytes INTEGER NOT NULL DEFAULT 0,
+     files INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS skills (
+     id TEXT PRIMARY KEY, name TEXT, description TEXT, triggers TEXT,
+     content TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+     builtin INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS exts (
+     id TEXT PRIMARY KEY, name TEXT, description TEXT, kind TEXT, config TEXT,
+     enabled INTEGER NOT NULL DEFAULT 1, builtin INTEGER NOT NULL DEFAULT 0,
+     sort INTEGER NOT NULL DEFAULT 0, updated_at INTEGER)`,
+  `CREATE TABLE IF NOT EXISTS modules (
+     id TEXT PRIMARY KEY, name TEXT, description TEXT, code TEXT NOT NULL,
+     params TEXT, call_points TEXT, method TEXT, path TEXT,
+     enabled INTEGER NOT NULL DEFAULT 1, timeout_ms INTEGER NOT NULL DEFAULT 5000,
+     created_at INTEGER, updated_at INTEGER)`,
 ];
 
 let ready = null;

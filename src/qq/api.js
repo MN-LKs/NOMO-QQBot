@@ -1,4 +1,4 @@
-const UA = 'NPAPI/1.0';
+const UA = 'NOMO-QQBot/4.0';
 
 export const ERR_URL_FORBIDDEN = 40054010;
 export const ERR_TOO_LONG = 40054007;

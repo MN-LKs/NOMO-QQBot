@@ -1,3 +1,8 @@
+// 站点文件读写。底层交给 storage.js 的统一存储层(可能落在 R2 / KV / 外部 S3)。
+// 这里只负责:路径规范、文本压缩(gzip)、读时按需解压。
+
+import { putObject, getObject, deleteObject, deletePrefix } from './storage.js';
+
 const MIME = {
   html: 'text/html; charset=utf-8',
   htm: 'text/html; charset=utf-8',
@@ -75,14 +80,14 @@ export async function putFile(env, siteId, path, content, ct) {
       gz = 0;
     }
   }
-  await env.STORE.put(keyFor(siteId, path), stored);
-  return { rawSize, size: stored.byteLength, gz, ct: type };
+  const r = await putObject(env, keyFor(siteId, path), stored, { contentType: type });
+  return { rawSize, size: stored.byteLength, gz, ct: type, storeId: r.storeId, mirrors: r.mirrors };
 }
 
 export async function getFile(env, siteId, path, gz) {
-  const raw = await env.STORE.get(keyFor(siteId, path), 'arrayBuffer');
-  if (!raw) return null;
-  const bytes = new Uint8Array(raw);
+  const r = await getObject(env, keyFor(siteId, path));
+  if (!r) return null;
+  const bytes = r.bytes;
   if (gz) {
     try {
       return await gunzipBytes(bytes);
@@ -96,12 +101,11 @@ export async function getFile(env, siteId, path, gz) {
 /**
  * 不查数据库直接读:靠 gzip 魔数(0x1f 0x8b)判断是否压缩。
  * 压缩只对文本做,文本文件不会以这两个字节开头;万一解压失败也原样返回,不会损坏数据。
- * 省掉一次 D1 查询,页面加载更快。
  */
 export async function getFileAuto(env, siteId, path) {
-  const raw = await env.STORE.get(keyFor(siteId, path), 'arrayBuffer');
-  if (!raw) return null;
-  const bytes = new Uint8Array(raw);
+  const r = await getObject(env, keyFor(siteId, path));
+  if (!r) return null;
+  const bytes = r.bytes;
   if (bytes.length > 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
     try {
       return await gunzipBytes(bytes);
@@ -113,20 +117,9 @@ export async function getFileAuto(env, siteId, path) {
 }
 
 export async function delFile(env, siteId, path) {
-  await env.STORE.delete(keyFor(siteId, path));
+  await deleteObject(env, keyFor(siteId, path));
 }
 
 export async function delAll(env, siteId) {
-  let cursor = undefined;
-  let removed = 0;
-  for (let i = 0; i < 10; i++) {
-    const page = await env.STORE.list({ prefix: `f/${siteId}/`, cursor, limit: 1000 });
-    for (const k of page.keys) {
-      await env.STORE.delete(k.name);
-      removed++;
-    }
-    if (page.list_complete) break;
-    cursor = page.cursor;
-  }
-  return removed;
+  return await deletePrefix(env, `f/${siteId}/`);
 }

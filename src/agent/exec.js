@@ -1,11 +1,12 @@
 import { calc, formatNumber } from '../util/calc.js';
 import { htmlToText } from '../util/html.js';
 import { truncate } from '../util/text.js';
-import { webSearch } from './search.js';
+import { webSearch, readPage } from './search.js';
+import { execBackend, moduleResultText, sandboxFetch } from '../core/backend.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
-const TOOL_LIST = 'calc, now, web_search, fetch_url, deploy_site, update_site, list_sites, read_site, delete_site, fs_write, fs_read, fs_list, fs_edit, fs_delete, fs_deploy, remember, recall, forget, random, encode, query_dashboard';
+const TOOL_LIST = 'calc, now, web_search, fetch_url, group_recent, group_find, deploy_site, update_site, list_sites, read_site, delete_site, fs_write, fs_read, fs_list, fs_edit, fs_delete, fs_deploy, remember, recall, forget, random, encode, query_dashboard';
 
 function fmtTime(d, offsetHours) {
   const t = new Date(d.getTime() + offsetHours * 3600_000);
@@ -69,58 +70,6 @@ async function fetchText(url, { timeoutMs = 20000, maxBytes = 800000 } = {}) {
   } finally {
     clearTimeout(timer);
   }
-}
-
-/**
- * 走管理员配置的「网页查询 API」读页面(通常是能渲染 JS 的提取服务)。
- * 请求约定: POST <extract.url>, body = { url, format? }, 返回 JSON 或纯文本。
- * 任何失败都返回 null,由调用方回退到直接抓取。
- */
-async function fetchViaExtract(cfg, targetUrl, maxChars) {
-  const body = { url: targetUrl };
-  if (cfg.extractFormat) body.format = cfg.extractFormat;
-  const headers = {
-    'Accept': 'application/json, text/plain, */*',
-    'Content-Type': 'application/json',
-    'User-Agent': UA,
-    ...(cfg.extractKey ? { 'Authorization': `Bearer ${cfg.extractKey}`, 'X-API-KEY': cfg.extractKey } : {}),
-    ...(cfg.extractHeaders || {}),
-  };
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 30000);
-  try {
-    const res = await fetch(cfg.extractUrl, { method: 'POST', headers, body: JSON.stringify(body), signal: ctrl.signal });
-    if (!res.ok) return null;
-    const ct = String(res.headers.get('content-type') || '');
-    let text = '';
-    if (ct.includes('json')) {
-      const json = await res.json().catch(() => null);
-      text = pickExtractText(json);
-    } else {
-      text = await res.text();
-    }
-    if (!text || !String(text).trim()) return null;
-    return `来自 ${targetUrl} 的正文(经网页查询 API):\n${truncate(String(text).trim(), maxChars)}`;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// 从各种提取服务的 JSON 里找正文:常见字段名优先,找不到就递归下去
-function pickExtractText(json, depth = 0) {
-  if (typeof json === 'string') return json;
-  if (!json || typeof json !== 'object' || depth > 6) return '';
-  for (const k of ['content', 'text', 'markdown', 'body', 'result', 'data', 'html', 'output']) {
-    const v = json[k];
-    if (typeof v === 'string' && v.trim()) return v;
-    if (v && typeof v === 'object') {
-      const inner = pickExtractText(v, depth + 1);
-      if (inner) return inner;
-    }
-  }
-  return '';
 }
 
 /** 查询中转站用量面板(默认 nexacode 面板接口,可在设置里改) */
@@ -255,16 +204,26 @@ export async function executeTool(name, args, ctx) {
         return `现在是 ${t.text}(${t.tz}),ISO: ${t.iso}`;
       }
 
-      case 'web_search':
-        return await webSearch(ctx.cfg, String(a.query || ''), a.count);
+      case 'web_search': {
+        const t0 = Date.now();
+        const out = await webSearch(ctx.cfg, String(a.query || ''), a.count);
+        if (ctx.log) ctx.log(`[搜索] ${String(a.query || '').slice(0, 60)} -> ${Date.now() - t0}ms`);
+        return out;
+      }
+
+      case 'group_recent':
+        return await ctx.core.groupRecent(String(a.group || ''), Number(a.limit) || 20, ctx.convId);
+
+      case 'group_find':
+        return await ctx.core.groupFind(String(a.keyword || ''));
 
       case 'fetch_url': {
         const u = assertPublicUrl(a.url);
         const maxChars = Math.max(500, Math.min(12000, Number(a.max_chars) || 4000));
-        // 配了「网页查询 API」就优先走它(能处理 JS 动态渲染的站点);失败再回退直抓
-        if (ctx.cfg.extractUrl) {
-          const viaApi = await fetchViaExtract(ctx.cfg, u.toString(), maxChars);
-          if (viaApi) return viaApi;
+        // 配了「网页读取(/reader)」就优先走它(能处理 JS 动态渲染的站点);失败再回退直抓
+        if (ctx.cfg.searchEnabled && ctx.cfg.readerApiUrl) {
+          const viaApi = await readPage(ctx.cfg, u.toString(), maxChars);
+          if (viaApi.text) return `来自 ${u.toString()} 的正文(经网页读取接口):\n${viaApi.text}`;
         }
         const raw = await fetchText(u.toString());
         const head = raw.trimStart();
@@ -272,7 +231,7 @@ export async function executeTool(name, args, ctx) {
           ? truncate(raw, maxChars)
           : htmlToText(raw, maxChars);
         const thin = text.length < 300
-          ? '\n\n【注意】这个页面直接抓到的正文很少,很可能是 JavaScript 动态渲染的站点(正文要等脚本跑完才出现),或者被反爬拦住了。建议改用 web_search 搜索相关关键词(摘要里往往有内容),或换一个静态来源;如果管理员配置了「网页查询 API」,也可以用那个来读。'
+          ? '\n\n【注意】这个页面直接抓到的正文很少,很可能是 JavaScript 动态渲染的站点(正文要等脚本跑完才出现),或者被反爬拦住了。建议改用 web_search 搜索相关关键词(摘要里往往有内容),或换一个静态来源;如果管理员配置了「网页读取接口」,也可以用那个来读。'
           : '';
         return `来自 ${u.toString()} 的正文:\n${text}${thin}`;
       }
@@ -427,8 +386,22 @@ export async function executeTool(name, args, ctx) {
         ].join('\n');
       }
 
-      default:
+      default: {
+        // 预制后端JS模块(动态工具)
+        const mod = ctx.modules && ctx.modules.get ? ctx.modules.get(name) : null;
+        if (mod) {
+          const r = await execBackend(mod.code, {
+            args: a,
+            fetch: (url, init) => sandboxFetch(url, init, mod.timeoutMs || 15000),
+            now: () => Date.now(),
+            json: (x) => JSON.parse(String(x)),
+            text: (x) => JSON.stringify(x),
+          }, { timeoutMs: mod.timeoutMs || 5000 });
+          if (ctx.log) ctx.log(`[模块] ${mod.name}(${name}) -> ${r.ok ? 'ok' : r.error}`);
+          return moduleResultText(r);
+        }
         return `没有名为 ${name} 的工具。可用工具:${TOOL_LIST}。`;
+      }
     }
   } catch (e) {
     return `工具 ${name} 执行失败: ${e?.message || e}`;

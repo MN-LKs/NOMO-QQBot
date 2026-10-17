@@ -30,7 +30,7 @@ function eqStr(a, b) {
 }
 
 async function hmacKey(env) {
-  const material = `${env?.ADMIN_USER || ''}|${env?.ADMIN_PASS || ''}|npapi-session`;
+  const material = `${env?.ADMIN_USER || ''}|${env?.ADMIN_PASS || ''}|nomo-session`;
   const digest = await crypto.subtle.digest('SHA-256', enc.encode(material));
   return crypto.subtle.importKey('raw', digest, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
 }

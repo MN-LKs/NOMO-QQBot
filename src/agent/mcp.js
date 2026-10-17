@@ -52,7 +52,7 @@ async function httpSession(server, steps) {
   const headers = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
-    'User-Agent': 'NPAPI/3.0',
+    'User-Agent': 'NOMO-QQBot/4.0',
     ...parseHeaders(server.headers),
   };
   const out = [];
@@ -71,7 +71,7 @@ async function httpSession(server, steps) {
 }
 
 async function sseSession(server, steps) {
-  const headers = { Accept: 'text/event-stream', 'User-Agent': 'NPAPI/3.0', ...parseHeaders(server.headers) };
+  const headers = { Accept: 'text/event-stream', 'User-Agent': 'NOMO-QQBot/4.0', ...parseHeaders(server.headers) };
   const res = await fetch(server.url, { headers });
   if (!res.ok || !res.body) throw new Error(`MCP SSE 连接失败 HTTP ${res.status}`);
   const reader = res.body.getReader();
@@ -143,7 +143,7 @@ async function sseSession(server, steps) {
 
 function steps(extra = []) {
   return [
-    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'NPAPI', version: '3.0' } } },
+    { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: PROTOCOL, capabilities: {}, clientInfo: { name: 'NOMO-QQBot', version: '4.0' } } },
     { jsonrpc: '2.0', method: 'notifications/initialized' },
     ...extra,
   ];

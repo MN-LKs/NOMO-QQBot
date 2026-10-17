@@ -44,4 +44,14 @@ export const SCHEMA = [
      content    TEXT NOT NULL,
      updated_at INTEGER NOT NULL
    )`,
+
+  `CREATE TABLE IF NOT EXISTS gmsg (
+     id         TEXT PRIMARY KEY,
+     group_id   TEXT NOT NULL,
+     user_id    TEXT,
+     user_name  TEXT,
+     content    TEXT NOT NULL,
+     ts         INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_gmsg_group ON gmsg(group_id, ts)`,
 ];

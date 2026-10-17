@@ -9,6 +9,7 @@ import { loginPage, panelPage } from './panel/ui.js';
 import { isAuthed, checkCredentials, issue, cookieHeader, clearCookieHeader, readCookie, lockedFor, noteFail, clearFail, sameOrigin } from './panel/auth.js';
 import { write as logWrite } from './store/logs.js';
 import { ensureSchema } from './store/db.js';
+import { ensureDetected } from './store/storage.js';
 
 export { BotCore };
 
@@ -108,6 +109,14 @@ async function panel(request, env, url, missing) {
     }
     await clearFail(env, ip);
     await logWrite(env, 'info', 'panel', `管理员登录成功 ip=${ip}`);
+    // 登录时自动检测存储绑定:绑了 R2 就补进配置并设为主存储(失败不挡登录)
+    if (env?.DB) {
+      try {
+        await ensureDetected(env);
+      } catch {
+        /* ignore */
+      }
+    }
     const token = await issue(env);
     return jsonRes({ ok: true }, 200, { 'Set-Cookie': cookieHeader(token, FIXED.sessionDays * 86400) });
   }

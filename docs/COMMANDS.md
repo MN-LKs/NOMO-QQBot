@@ -47,6 +47,9 @@
 | `calc` | 精确计算,不心算 |
 | `now` | 当前时间(北京时间) |
 | `remember` / `recall` / `forget` | 长期记忆 |
+| `group_recent` | 查群消息缓存(最近若干条,带时间和昵称) |
+| `group_find` | 按关键词找群 |
+| `query_dashboard` | 查 AI 中转站面板的实时用量 |
 | `random` | 掷骰子、抽签、随机数 |
 | `encode` | Base64 / URL / 十六进制互转,JSON 格式化 |
 | `mcp_*` | 面板里接的 MCP 服务器提供的工具 |

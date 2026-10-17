@@ -10,8 +10,8 @@
         QQ 群 / 单聊
              │
    ┌─────────┴──────────┐
-   │ WebSocket(默认)     │ WebHook(可选)
-   │ 机器人主动连网关      │ 腾讯 POST /qq/webhook
+   │ WebHook(默认)       │ WebSocket(可选)
+   │ 腾讯 POST 回调       │ 机器人主动连网关
    └─────────┬──────────┘
              ▼
      Durable Object「BotCore」   ← 队列、会话上下文、沙盒、WebSocket 宿主
@@ -38,11 +38,12 @@
    - WebHook:`src/qq/webhook.js` 验签(op=13 走签名回应,op=0 验 Ed25519,失败一律 401)→ 同样入队
 2. **排队**:任务写进 DO 的 `jobs` 表,并给自己定一个 300ms 后的闹钟
 3. **处理**:`alarm()` → `tick()` → `claimNextJob()` → `handleMessage()`
-   - 先做群白名单检查(不在名单里直接忽略,并记日志)
+   - 群消息先写进 `gmsg` 缓存(群聊记忆工具用),全量接收模式下没 @ 机器人的也存
+   - 再做群白名单检查(不在名单里直接忽略,并记日志)
    - 再匹配斜杠命令(`/帮助` `/查信息` `/压缩` `/记忆` `/状态` `/清空`)
    - 其余交给 `runAgent()`
-4. **回复**:先发一条「Agent 正在运行」的回执(被动回复),
-   结果再发一次(群聊走主动消息、单聊走被动),两边互为兜底
+4. **回复**:被动优先、主动兜底 —— 回执只在被动窗口内发(省主动额度),
+   结果默认走被动回复,超窗或发不出去时自动改主动消息重试一次
 5. **收尾**:把这一轮写进会话历史,超长自动压缩
 
 > 为什么非要 Durable Object?QQ 要求 5 秒内 ACK,而一次带思考的模型调用要几十秒。
@@ -64,17 +65,24 @@
 | `projects` | 项目清单(ID、名称、到期时间、占用、访问次数) |
 | `files` | 每个项目里每个文件的元信息(大小、压缩后大小、MIME、是否 gzip) |
 | `sdata` | 部署页面通过 `/__data/` 存的小数据 |
+| `skills` | 技能文档(按触发词注入系统提示词) |
+| `exts` | 扩展开关与外部扩展配置 |
+| `modules` | 预制后端 JS 模块(代码、参数、调用点) |
+| `stusage` | 各存储的用量统计 |
 | `admins` / `mcp` / `logins` / `usage` | 管理员、MCP 服务器、登录限流、写入计数 |
 
-### KV(`env.STORE`)—— 部署出来的文件本体
+### KV / R2 / S3 —— 部署出来的文件本体
 
-- 键:`f/<8位ID>/<文件路径>`
-- 值:文件字节(文本类超过 256 字节就 gzip,图片视频原样存)
+- 统一存储层(`src/store/storage.js`):写入时按优先级挑第一个「启用 + 可用 + 有余量」的存储
+  - `r2`:绑了 `env.R2` 就自动出现,优先级 100(主存储)
+  - `s3`:面板里手动添加的 S3 兼容存储,默认优先级 50
+  - `kv`:绑了 `env.STORE` 就自动出现,优先级 10;主存储不是 KV 时顺带写一份当缓存
+- 键:`f/<8位ID>/<文件路径>`;文本类超过 96 字节就 gzip,图片视频原样存
 - 删除项目时按前缀 `f/<id>/` 全部清掉
 
 ### DO 内部 SQLite —— 只放跟会话有关的
 
-`conv` / `msg`(会话与历史)、`mem`(长期记忆)、`jobs`(队列)、`fs`(AI 沙盒)、`kv`(临时键值,比如 token 缓存)
+`conv` / `msg`(会话与历史)、`mem`(长期记忆)、`jobs`(队列)、`fs`(AI 沙盒)、`gmsg`(群消息缓存)、`kv`(临时键值,比如 token 缓存)
 
 ---
 
@@ -133,10 +141,13 @@ src/
     logs.js           日志写入/查询/清理
     stats.js          计数器与概览
     projects.js       项目 CRUD、配额计算、文件写入
-    kvfile.js         KV 读写、gzip、MIME 表
+    kvfile.js         站点文件读写(路径规范、gzip、MIME)
+    storage.js        统一存储层(KV / R2 / S3:自动选路、镜像缓存、用量)
+    s3.js             S3 兼容存储的 SigV4 客户端
+    modules.js        预制后端 JS 模块的读写
   panel/
     auth.js           登录、会话 Cookie、限流
-    api.js            面板所有接口
+    api.js            面板所有接口(含存储 / 模块 / 技能 / 扩展)
     ui.js             面板前端(单文件)
   qq/
     gateway.js        WebSocket 网关:握手、心跳、重连、事件分发
@@ -144,15 +155,20 @@ src/
     sign.js           Ed25519 验签与 op=13 签名
     api.js            取 token、发群消息/单聊消息
   core/
-    do.js             BotCore:队列、命令、上下文、站点工具、沙盒、WebSocket 宿主
+    do.js             BotCore:队列、命令、上下文、站点工具、沙盒、群消息缓存、WebSocket 宿主
     schema.js         DO 内部表
+    jsmini.js         JavaScript 迷你解释器(Workers 禁 eval,沙盒靠它)
+    jsmini-run.js     解释器的运行时(把代码跑起来、限步数、超时)
+    backend.js        后端沙盒执行器(预制模块从这里跑;含安全 fetch)
   agent/
     loop.js           Agent 主循环(多轮工具调用)
     llm.js            模型调用与降级阶梯
     tools.js          工具定义
     exec.js           工具执行
+    exts.js           扩展系统(内置工具组开关 + 外部 HTTP 扩展)
+    skills.js         技能注入(按触发词挑选)
     mcp.js            MCP 客户端(Streamable HTTP / SSE)
-    search.js         多搜索服务商适配
+    search.js         搜索与网页读取适配(单地址 → /search + /reader)
     prompt.js         系统提示词与人设
   util/               文本、计算、编码、字节等小工具
 ```
@@ -175,8 +191,10 @@ src/
 ## 九、测试
 
 ```
-npm test                 单元测试  69 项(纯逻辑:配额、鉴权、压缩、网关帧处理……)
-npm run test:integration 集成测试  47 项(假上游 + 真 Worker 代码)
+npm test                 单元测试  144 项(纯逻辑:配额、鉴权、压缩、网关帧处理、技能挑选、存储选路……)
+npm run test:jsmini      沙盒解释器 59 项(语法、运算、作用域、超时、防死循环)
+npm run test:integration 集成测试  68 项(假上游 + 真 Worker 代码)
+npm run test:all         敏感扫描 + 上面全部
 ```
 
 集成测试会现场起三个假服务器:

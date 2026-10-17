@@ -1,4 +1,4 @@
-name               = "npapi"
+name               = "nomo-qqbot"
 main               = "src/index.js"
 compatibility_date = "2026-09-01"
 
@@ -6,28 +6,36 @@ compatibility_date = "2026-09-01"
 enabled = true
 
 # 只保留两个变量:面板的用户名和密码。
-# 其它配置(AI 接口、搜索、APPID/AppSecret、连接方式等)全部在面板里设置,存进 D1。
+# 其它配置(AI 接口、搜索、存储桶、APPID/AppSecret、连接方式等)全部在面板里设置,存进 D1。
 [vars]
 ADMIN_USER = ""
 ADMIN_PASS = ""
 
 # ---------------------------------------------------------------------------
 # 需要两个绑定:D1 数据库(DB)和 KV 命名空间(STORE)。
+# 可选第三个绑定:R2 存储桶(R2)。绑了 R2 之后,登录面板会自动把 R2 设为主存储,
+# 部署的文件优先存 R2(免费额度 10 GB),KV 退居备用/缓存。
+# 还可以在面板「存储」页里接外部的 S3 兼容存储(Filebase、Upstash Blob 等)。
 #
-# 方式一(推荐):在 Cloudflare 后台 → Workers & Pages → npapi → Settings → Bindings
+# 方式一(推荐):在 Cloudflare 后台 → Workers & Pages → nomo-qqbot → Settings → Bindings
 #   添加 D1 database  变量名填 DB
 #   添加 KV namespace 变量名填 STORE
+#   添加 R2 bucket    变量名填 R2     (可选,但强烈建议)
 #
-# 方式二:在后台创建好后,把 ID 填到下面两段里再提交(数据库 ID 不是密钥,可以公开)
+# 方式二:在后台创建好后,把 ID 填到下面几段里再提交(数据库 ID 不是密钥,可以公开)
 # ---------------------------------------------------------------------------
 # [[d1_databases]]
 # binding       = "DB"
-# database_name = "npapi"
+# database_name = "nomo-qqbot"
 # database_id   = ""
 
 # [[kv_namespaces]]
 # binding = "STORE"
 # id      = ""
+
+# [[r2_buckets]]
+# binding     = "R2"
+# bucket_name = "nomo-qqbot"
 
 [[durable_objects.bindings]]
 name       = "BOT_CORE"
@@ -37,6 +45,6 @@ class_name = "BotCore"
 tag = "v1"
 new_sqlite_classes = ["BotCore"]
 
-# 每 2 分钟兜一次底:重连 WebSocket、处理积压消息、清理过期项目
+# 每 2 分钟兜一次底:重连 WebSocket、处理积压消息、清理过期项目、清理群消息缓存
 [triggers]
 crons = ["*/2 * * * *"]

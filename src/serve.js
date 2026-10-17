@@ -50,7 +50,7 @@ function noteView(env, ctx, id) {
   }
 }
 
-export function page(code, msg, status = 404, note = '这个页面由 NPAPI 临时部署,到期会自动销毁') {
+export function page(code, msg, status = 404, note = '这个页面由 NOMO-QQBot 临时部署,到期会自动销毁') {
   return new Response(
     `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">`
     + `<title>${code}</title><style>body{font:15px/1.7 -apple-system,"PingFang SC",sans-serif;display:flex;align-items:center;`

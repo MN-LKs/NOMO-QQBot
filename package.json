@@ -1,8 +1,8 @@
 {
-  "name": "npapi",
-  "version": "3.0.0",
+  "name": "nomo-qqbot",
+  "version": "4.0.0",
   "private": true,
-  "description": "QQ 官方机器人 + AI Agent + 在线代码部署,运行在 Cloudflare Workers 上,自带管理面板",
+  "description": "NOMO-QQBot:QQ 官方机器人 + AI Agent + 在线部署,运行在 Cloudflare Workers 上,自带管理面板",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
@@ -12,8 +12,9 @@
     "check:secrets": "node tools/scan-secrets.js",
     "pretest": "node tools/scan-secrets.js",
     "test": "node test/run.js",
+    "test:jsmini": "node test/jsmini.test.mjs",
     "test:integration": "node test/integration.js",
-    "test:all": "node tools/scan-secrets.js && node test/run.js && node test/integration.js"
+    "test:all": "node tools/scan-secrets.js && node test/run.js && node test/jsmini.test.mjs && node test/integration.js"
   },
   "devDependencies": {
     "wrangler": "^4.20.0"

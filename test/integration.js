@@ -58,6 +58,8 @@ async function startUpstream() {
           ['TEST_TOOL_DASHBOARD', 'query_dashboard', {}],
           ['TEST_TOOL_FETCH', 'fetch_url', { url: 'https://example.com/article' }],
           ['TEST_TOOL_LISTSITES', 'list_sites', {}],
+          ['TEST_TOOL_GROUPRECENT', 'group_recent', {}],
+          ['TEST_TOOL_MODULE', 'echo_mod', { x: 21 }],
         ].find(([mark]) => userText.includes(mark));
         if (magic && !hasToolResult) {
           const [, name, args] = magic;
@@ -95,7 +97,7 @@ async function startUpstream() {
         });
       }
       if (req.url.includes('/extract')) {
-        return send({ content: '这是网页查询 API 提取到的正文内容,专门给测试用。' });
+        return send({ content: '这是网页查询 API 提取到的正文内容,专门给测试用。正文需要足够长才能被内容提取逻辑直接命中,所以这里再多写一些字凑够长度,顺便验证映射和截断都没问题。' });
       }
       if (req.url.includes('/models')) {
         return send({ data: [{ id: 'test-model-a' }, { id: 'test-model-b' }] });
@@ -211,10 +213,10 @@ await t('伪造 Cookie 无效', async () => {
 });
 
 console.log('\n【设置】');
-await t('读取设置:默认连接方式为 WebSocket', async () => {
+await t('读取设置:默认连接方式为 WebHook', async () => {
   const r = await api('/settings');
   assert(r.status === 200, `实际 ${r.status}`);
-  assert(r.json.settings.qq.mode === 'websocket', r.json.settings.qq.mode);
+  assert(r.json.settings.qq.mode === 'webhook', r.json.settings.qq.mode);
   assert(r.json.callbackUrl.endsWith('/qq/webhook'), r.json.callbackUrl);
 });
 await t('保存 AI 接口与 QQ 凭据', async () => {
@@ -541,11 +543,11 @@ await t('工具 query_dashboard:返回中转站用量', async () => {
   assert(text.includes('1.2 万'), `应包含累计请求数,实际:${text.slice(0, 300)}`);
   assert(text.includes('tester'), `应包含最近调用,实际:${text.slice(0, 300)}`);
 });
-await t('工具 fetch_url:优先走网页查询 API', async () => {
-  await api('/settings', { method: 'POST', body: { extract: { url: `http://127.0.0.1:${up.port}/extract`, format: 'json' } } });
+await t('工具 fetch_url:优先走网页读取接口', async () => {
+  await api('/settings', { method: 'POST', body: { search: { baseUrl: `http://127.0.0.1:${up.port}`, searchPath: '/search', readerPath: '/extract' } } });
   resetDoCfg();
   const text = await toolResultFor('TEST_TOOL_FETCH');
-  assert(text.includes('经网页查询 API'), `实际:${text.slice(0, 300)}`);
+  assert(text.includes('经网页读取接口'), `实际:${text.slice(0, 300)}`);
   assert(text.includes('提取到的正文'), `实际:${text.slice(0, 300)}`);
 });
 await t('工具 list_sites:项目到期销毁后会解释原因', async () => {
@@ -558,6 +560,88 @@ await t('工具 list_sites:项目到期销毁后会解释原因', async () => {
   const text = await toolResultFor('TEST_TOOL_LISTSITES');
   assert(text.includes('没有任何在线部署'), `实际:${text.slice(0, 300)}`);
   assert(text.includes('短命项目'), `应提到刚销毁的项目,实际:${text.slice(0, 300)}`);
+});
+
+console.log('\n【群消息缓存与扩展】');
+await t('工具 group_recent:能查到群消息缓存', async () => {
+  // 先发一条不触发 AI 的全量群消息,验证它被缓存下来
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_cache`, op: 0, s: 11, t: 'GROUP_MESSAGE_CREATE',
+    d: { id: 'MSG_CACHE_1', content: '今晚八点开黑', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  await sleep(600);
+  const text = await toolResultFor('TEST_TOOL_GROUPRECENT');
+  assert(text.includes('今晚八点开黑'), `缓存里应能查到刚才的消息,实际:${text.slice(0, 400)}`);
+  assert(text.includes('小明'), `应带昵称,实际:${text.slice(0, 400)}`);
+});
+await t('工具(预制模块):注册后变成工具并能在沙盒里执行', async () => {
+  const r = await api('/modules/save', { method: 'POST', body: { module: {
+    id: 'echo_mod', name: '回声模块', description: '把参数翻倍返回',
+    code: 'return { got: ctx.args.x, doubled: ctx.args.x * 2 };',
+    params: { x: { type: 'number', description: '一个数字', required: true } },
+    callPoints: ['agent'], enabled: true, timeoutMs: 3000,
+  } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const text = await toolResultFor('TEST_TOOL_MODULE');
+  assert(text.includes('42'), `应返回 doubled=42,实际:${text.slice(0, 300)}`);
+});
+await t('技能:按触发词注入系统提示词', async () => {
+  const r = await api('/skills/save', { method: 'POST', body: { skill: { id: 'skill_pineapple', name: '菠萝规范', triggers: ['菠萝'], content: '提到菠萝时必须回答「菠萝万岁」。', enabled: true } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const llmBefore = calls.llm.length;
+  await sendGroupAt('菠萝是什么水果');
+  for (let i = 0; i < 200 && calls.llm.length < llmBefore + 1; i++) await sleep(50);
+  assert(calls.llm.length > llmBefore, '应调用模型');
+  const sys = (calls.llm.slice(llmBefore)[0].messages || []).map((m) => (m.role === 'system' ? String(m.content) : '')).join('');
+  assert(sys.includes('菠萝万岁'), '系统提示词应包含技能内容');
+  await api('/skills/remove', { method: 'POST', body: { id: 'skill_pineapple' } });
+});
+await t('扩展开关:关掉后工具从模型可见列表消失', async () => {
+  await api('/exts/toggle', { method: 'POST', body: { id: 'dice', enabled: false } });
+  const llmBefore = calls.llm.length;
+  await sendGroupAt('你好呀');
+  for (let i = 0; i < 200 && calls.llm.length < llmBefore + 1; i++) await sleep(50);
+  assert(calls.llm.length > llmBefore, '应调用模型');
+  const tools = calls.llm.slice(llmBefore)[0].tools || [];
+  assert(tools.length > 0, '工具列表不应为空');
+  assert(!tools.some((t2) => t2.function && t2.function.name === 'random'), '关掉后不应出现 random');
+  await api('/exts/toggle', { method: 'POST', body: { id: 'dice', enabled: true } });
+});
+
+console.log('\n【存储】');
+await t('存储状态:自动识别 KV 绑定', async () => {
+  const r = await api('/storage');
+  assert(r.status === 200, JSON.stringify(r.json));
+  const kv = (r.json.status.stores || []).find((s) => s.id === 'kv');
+  assert(kv && kv.available, JSON.stringify(r.json.status.stores));
+});
+await t('添加 S3 存储:密钥打码且不泄露', async () => {
+  const r = await api('/storage/save', { method: 'POST', body: { store: {
+    kind: 's3', name: '测试 S3', endpoint: 'https://s3.example.com', bucket: 'demo',
+    region: 'auto', accessKey: 'AKTEST123456', secretKey: 'secret-key-1234567890',
+    priority: 50, maxBytes: 100 * 1024 * 1024,
+  } } });
+  assert(r.status === 200 && r.json.id, JSON.stringify(r.json));
+  const list = await api('/storage');
+  const s3 = (list.json.status.stores || []).find((s) => s.id === r.json.id);
+  assert(s3 && s3.available, JSON.stringify(list.json.status.stores));
+  assert(s3.accessKey.includes('****'), `accessKey 应打码:${s3.accessKey}`);
+  assert(!JSON.stringify(list.json).includes('secret-key-1234567890'), '响应不应包含明文密钥');
+  const st = await api('/settings');
+  assert(!JSON.stringify(st.json.settings.storage.stores).includes('secret-key-1234567890'), '设置里也不应出现明文');
+});
+await t('删除 S3 存储', async () => {
+  const list = await api('/storage');
+  const s3 = (list.json.status.stores || []).find((s) => s.name === '测试 S3');
+  assert(s3, '应存在测试存储');
+  const r = await api('/storage/remove', { method: 'POST', body: { id: s3.id } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const after = await api('/storage');
+  assert(!(after.json.status.stores || []).some((s) => s.id === s3.id), '应已删除');
 });
 
 console.log('\n【MCP】');

@@ -1,5 +1,5 @@
 import { FIXED, missingEnv } from '../config.js';
-import { getRaw, savePatch, maskSecrets } from '../store/settings.js';
+import { getRaw, savePatch, maskSecrets, loadCfg } from '../store/settings.js';
 import { list as logList, clear as logClear, cleanup as logCleanup, count as logCount, write as logWrite } from '../store/logs.js';
 import { overview } from '../store/stats.js';
 import * as P from '../store/projects.js';
@@ -7,8 +7,14 @@ import { quotaOf } from '../store/projects.js';
 import { getFile, isImageCt, mimeFor } from '../store/kvfile.js';
 import { all, ensureSchema, one, run } from '../store/db.js';
 import { listMcp, addMcp, updateMcp, removeMcp, testMcp } from '../agent/mcp.js';
-import { webSearch } from '../agent/search.js';
+import { testSearch } from '../agent/search.js';
 import { chatOnce } from '../agent/llm.js';
+import { status as storageStatus, availability, resolveStores, scanStore } from '../store/storage.js';
+import { S3Client } from '../store/s3.js';
+import { listModules, getModule, saveModule, removeModule } from '../store/modules.js';
+import { listSkills, saveSkill, removeSkill, parseSkillDoc } from '../agent/skills.js';
+import { loadExts, saveExt, removeExt } from '../agent/exts.js';
+import { execBackend, sandboxFetch } from '../core/backend.js';
 
 const JSON_H = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 
@@ -111,13 +117,6 @@ export async function handlePanelApi(request, env, url, ctx) {
           headers: cleanHeaders(patch.search.headers),
         };
       }
-      if (patch.extract) {
-        patch.extract = {
-          ...patch.extract,
-          key: keepSecret(patch.extract.key, cur.extract.key),
-          headers: cleanHeaders(patch.extract.headers),
-        };
-      }
       if (patch.qq) {
         patch.qq = { ...patch.qq, appSecret: keepSecret(patch.qq.appSecret, cur.qq.appSecret) };
       }
@@ -144,7 +143,7 @@ export async function handlePanelApi(request, env, url, ctx) {
       const headers = cleanHeaders(body?.headers);
       if (!baseUrl) return jsonRes({ error: '请先填写接口地址' }, 400);
       const res = await fetch(`${baseUrl}/models`, {
-        headers: { ...headers, ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), 'User-Agent': 'NPAPI/3.0' },
+        headers: { ...headers, ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), 'User-Agent': 'NOMO-QQBot/4.0' },
       });
       const text = await res.text();
       if (!res.ok) return jsonRes({ error: `接口返回 HTTP ${res.status}:${text.slice(0, 300)}` }, 400);
@@ -214,17 +213,10 @@ export async function handlePanelApi(request, env, url, ctx) {
     }
 
     if (path === '/test-search' && method === 'POST') {
-      const settings = await getRaw(env, { fresh: true });
-      const q = String(body?.query || 'test');
-      const cfg = {
-        ...FIXED,
-        searchApiUrl: settings.search.url,
-        searchApiKey: settings.search.key,
-        searchHeaders: settings.search.headers,
-      };
-      if (!cfg.searchApiUrl) return jsonRes({ error: '还没有配置搜索接口地址' }, 400);
-      const r = await webSearch(cfg, q, 3);
-      return jsonRes({ ok: true, result: String(r).slice(0, 4000) });
+      const cfg = await loadCfg(env);
+      if (!cfg.searchApiUrl && !cfg.readerApiUrl) return jsonRes({ error: '还没有配置搜索接口地址' }, 400);
+      const out = await testSearch(cfg, { query: body?.query, url: body?.url });
+      return jsonRes({ ok: true, result: out });
     }
 
     if (seg[0] === 'projects') {
@@ -237,6 +229,22 @@ export async function handlePanelApi(request, env, url, ctx) {
 
     if (seg[0] === 'mcp') {
       return await mcpApi(env, seg, method, body);
+    }
+
+    if (seg[0] === 'storage') {
+      return await storageApi(env, seg, method, body);
+    }
+
+    if (seg[0] === 'modules') {
+      return await modulesApi(env, seg, method, body);
+    }
+
+    if (seg[0] === 'skills') {
+      return await skillsApi(env, seg, method, body);
+    }
+
+    if (seg[0] === 'exts') {
+      return await extsApi(env, seg, method, body);
     }
 
     if (seg[0] === 'groups' && method === 'POST') {
@@ -407,7 +415,7 @@ async function logsApi(env, seg, method, url) {
     return new Response(text, {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
-        'Content-Disposition': `attachment; filename="npapi-logs-${new Date().toISOString().slice(0, 10)}.txt"`,
+        'Content-Disposition': `attachment; filename="nomo-logs-${new Date().toISOString().slice(0, 10)}.txt"`,
         'Cache-Control': 'no-store',
       },
     });
@@ -447,6 +455,233 @@ async function mcpApi(env, seg, method, body) {
     if (r.error) return jsonRes({ error: r.error }, 400);
     return jsonRes({ ok: true, count: r.count, tools: r.tools });
   }
+  return jsonRes({ error: 'not found' }, 404);
+}
+
+async function storageApi(env, seg, method, body) {
+  const settings = await getRaw(env, { fresh: true });
+  const stores = Array.isArray(settings.storage?.stores) ? [...settings.storage.stores] : [];
+
+  if (seg.length === 1 && method === 'GET') {
+    return jsonRes({ status: await storageStatus(env) });
+  }
+
+  if (seg.length === 2 && seg[1] === 'save' && method === 'POST') {
+    const src = body?.store && typeof body.store === 'object' ? body.store : {};
+    const id = String(src.id || '').trim();
+    const cur = stores.find((s) => s.id === id) || {};
+    let kind = String(src.kind || cur.kind || 's3');
+    if (kind !== 'r2' && kind !== 'kv' && kind !== 's3') kind = 's3';
+    const next = {
+      id: id || (kind === 's3' ? `s3_${Math.random().toString(36).slice(2, 8)}` : kind),
+      kind,
+      name: String(src.name || cur.name || (kind === 's3' ? 'S3 存储' : kind === 'r2' ? 'R2 存储桶' : 'KV 命名空间')).slice(0, 40),
+      enabled: src.enabled !== false,
+      priority: Number.isFinite(Number(src.priority)) ? Number(src.priority) : (Number(cur.priority) || (kind === 'r2' ? 100 : kind === 'kv' ? 10 : 50)),
+      maxBytes: Number(src.maxBytes) > 0 ? Math.round(Number(src.maxBytes)) : (Number(cur.maxBytes) || (kind === 'r2' ? 10 * 1024 ** 3 : kind === 'kv' ? 1024 ** 3 : 5 * 1024 ** 3)),
+    };
+    if (kind === 's3') {
+      next.endpoint = String(src.endpoint ?? cur.endpoint ?? '').trim();
+      next.bucket = String(src.bucket ?? cur.bucket ?? '').trim();
+      next.region = String(src.region ?? cur.region ?? 'auto').trim() || 'auto';
+      next.accessKey = String(src.accessKey ?? cur.accessKey ?? '').trim();
+      const sk = String(src.secretKey ?? '').trim();
+      next.secretKey = sk && !sk.includes('****') ? sk : String(cur.secretKey || '');
+      next.pathStyle = src.pathStyle !== false;
+      if (!next.endpoint || !next.bucket || !next.accessKey || !next.secretKey) {
+        return jsonRes({ error: 'S3 需要填全:endpoint / bucket / AccessKey / SecretKey' }, 400);
+      }
+    }
+    const idx = stores.findIndex((s) => s.id === next.id);
+    if (idx >= 0) stores[idx] = next;
+    else stores.push(next);
+    await savePatch(env, { storage: { stores, initialized: true } });
+    return jsonRes({ ok: true, id: next.id });
+  }
+
+  if (seg.length === 2 && seg[1] === 'remove' && method === 'POST') {
+    const id = String(body?.id || '');
+    await savePatch(env, { storage: { stores: stores.filter((s) => s.id !== id) } });
+    return jsonRes({ ok: true });
+  }
+
+  if (seg.length === 2 && seg[1] === 'test' && method === 'POST') {
+    const id = String(body?.id || '');
+    const s = resolveStores(settings, env).find((x) => x.id === id);
+    if (!s) return jsonRes({ error: '存储不存在' }, 404);
+    if (s.kind === 's3') {
+      const r = await new S3Client(s).test();
+      return jsonRes(r.ok ? { ok: true, note: r.note } : { ok: false, error: r.error });
+    }
+    const av = availability(env, s);
+    return jsonRes(av.ok ? { ok: true, note: `${s.name} 绑定正常` } : { ok: false, error: av.reason });
+  }
+
+  if (seg.length === 2 && seg[1] === 'scan' && method === 'POST') {
+    const id = String(body?.id || '');
+    const s = resolveStores(settings, env).find((x) => x.id === id);
+    if (!s) return jsonRes({ error: '存储不存在' }, 404);
+    const r = await scanStore(env, s);
+    if (r.error) return jsonRes({ error: r.error }, 400);
+    return jsonRes({ ok: true, bytes: r.bytes, files: r.files });
+  }
+
+  if (seg.length === 2 && seg[1] === 'cache' && method === 'POST') {
+    await savePatch(env, { storage: { cacheKV: !!body?.enabled } });
+    return jsonRes({ ok: true });
+  }
+
+  return jsonRes({ error: 'not found' }, 404);
+}
+
+async function modulesApi(env, seg, method, body) {
+  if (seg.length === 1 && method === 'GET') {
+    return jsonRes({ modules: await listModules(env) });
+  }
+
+  if (seg.length === 2 && seg[1] === 'save' && method === 'POST') {
+    const m = body?.module && typeof body.module === 'object' ? body.module : {};
+    const id = String(m.id || '').trim();
+    if (!/^[a-zA-Z0-9_-]{2,32}$/.test(id)) {
+      return jsonRes({ error: '模块 ID 只能用 2-32 位字母/数字/下划线/短横线(会作为工具名发给模型)' }, 400);
+    }
+    const code = String(m.code || '');
+    if (!code.trim()) return jsonRes({ error: '代码不能为空' }, 400);
+    if (code.length > FIXED.moduleMaxCode) return jsonRes({ error: `代码超过上限 ${FIXED.moduleMaxCode} 字符` }, 400);
+    let params = {};
+    if (m.params && typeof m.params === 'object') params = m.params;
+    else if (typeof m.params === 'string' && m.params.trim()) {
+      try {
+        params = JSON.parse(m.params);
+      } catch {
+        return jsonRes({ error: '参数定义不是合法 JSON' }, 400);
+      }
+    }
+    const callPoints = Array.isArray(m.callPoints) ? m.callPoints.filter((x) => x === 'agent' || x === 'site') : [];
+    const cur = await getModule(env, id);
+    await saveModule(env, {
+      id,
+      name: String(m.name || id).slice(0, 40),
+      description: String(m.description || '').slice(0, 200),
+      code,
+      params,
+      callPoints,
+      method: String(m.method || 'ANY').toUpperCase().slice(0, 10),
+      path: String(m.path || '').slice(0, 100),
+      enabled: m.enabled !== false,
+      timeoutMs: Math.max(500, Math.min(30000, Number(m.timeoutMs) || 5000)),
+      createdAt: cur?.createdAt || Date.now(),
+    });
+    return jsonRes({ ok: true, id });
+  }
+
+  if (seg.length === 2 && seg[1] === 'remove' && method === 'POST') {
+    await removeModule(env, String(body?.id || ''));
+    return jsonRes({ ok: true });
+  }
+
+  if (seg.length === 2 && seg[1] === 'test' && method === 'POST') {
+    const mod = await getModule(env, String(body?.id || ''));
+    if (!mod) return jsonRes({ error: '模块不存在' }, 404);
+    const r = await execBackend(mod.code, {
+      args: body?.args && typeof body.args === 'object' ? body.args : {},
+      fetch: (url, init) => sandboxFetch(url, init, mod.timeoutMs),
+      now: () => Date.now(),
+      json: (x) => JSON.parse(String(x)),
+      text: (x) => JSON.stringify(x),
+    }, { timeoutMs: mod.timeoutMs || 5000 });
+    return jsonRes({ ok: r.ok, value: r.value ?? null, error: r.error || '', logs: r.logs || [] });
+  }
+
+  return jsonRes({ error: 'not found' }, 404);
+}
+
+async function skillsApi(env, seg, method, body) {
+  if (seg.length === 1 && method === 'GET') {
+    return jsonRes({ skills: await listSkills(env) });
+  }
+
+  if (seg.length === 2 && seg[1] === 'save' && method === 'POST') {
+    const src = body?.skill && typeof body.skill === 'object' ? body.skill : {};
+    const skill = {
+      id: String(src.id || '').trim(),
+      name: String(src.name || '').trim().slice(0, 60),
+      description: String(src.description || '').trim().slice(0, 200),
+      triggers: Array.isArray(src.triggers)
+        ? src.triggers.map((x) => String(x).trim()).filter(Boolean)
+        : String(src.triggers || '').split(/[,,\s]+/).map((x) => x.trim()).filter(Boolean),
+      content: String(src.content || ''),
+      enabled: src.enabled !== false,
+    };
+    if (src.doc) {
+      const doc = parseSkillDoc(String(src.doc));
+      if (doc.name && !skill.name) skill.name = doc.name.slice(0, 60);
+      if (doc.description && !skill.description) skill.description = doc.description.slice(0, 200);
+      if (!skill.triggers.length && doc.triggers.length) skill.triggers = doc.triggers;
+      if (doc.content) skill.content = doc.content;
+    }
+    if (!skill.name) return jsonRes({ error: '请填写技能名称' }, 400);
+    if (!skill.content.trim()) return jsonRes({ error: '技能内容不能为空' }, 400);
+    if (!skill.id) skill.id = `skill_${Math.random().toString(36).slice(2, 8)}`;
+    await saveSkill(env, skill);
+    return jsonRes({ ok: true, id: skill.id });
+  }
+
+  if (seg.length === 2 && seg[1] === 'remove' && method === 'POST') {
+    await removeSkill(env, String(body?.id || ''));
+    return jsonRes({ ok: true });
+  }
+
+  return jsonRes({ error: 'not found' }, 404);
+}
+
+async function extsApi(env, seg, method, body) {
+  if (seg.length === 1 && method === 'GET') {
+    return jsonRes(await loadExts(env));
+  }
+
+  if (seg.length === 2 && seg[1] === 'toggle' && method === 'POST') {
+    const id = String(body?.id || '').trim();
+    if (!id) return jsonRes({ error: '缺少 id' }, 400);
+    await saveExt(env, { id, kind: 'builtin', enabled: !!body?.enabled });
+    return jsonRes({ ok: true });
+  }
+
+  if (seg.length === 2 && seg[1] === 'save' && method === 'POST') {
+    const src = body?.ext && typeof body.ext === 'object' ? body.ext : {};
+    const id = String(src.id || '').trim();
+    if (!/^[a-zA-Z0-9_-]{2,32}$/.test(id)) {
+      return jsonRes({ error: '扩展 ID 只能用 2-32 位字母/数字/下划线/短横线' }, 400);
+    }
+    let config = {};
+    if (typeof src.config === 'string' && src.config.trim()) {
+      try {
+        config = JSON.parse(src.config);
+      } catch {
+        return jsonRes({ error: '工具定义不是合法 JSON' }, 400);
+      }
+    } else if (src.config && typeof src.config === 'object') {
+      config = src.config;
+    }
+    if (!Array.isArray(config.tools) || !config.tools.length) {
+      return jsonRes({ error: 'config.tools 需要是非空数组,至少定义一个工具' }, 400);
+    }
+    await saveExt(env, {
+      id,
+      kind: 'external',
+      name: String(src.name || id).slice(0, 40),
+      description: String(src.description || '').slice(0, 200),
+      config,
+      enabled: src.enabled !== false,
+    });
+    return jsonRes({ ok: true, id });
+  }
+
+  if (seg.length === 2 && seg[1] === 'remove' && method === 'POST') {
+    await removeExt(env, String(body?.id || ''));
+    return jsonRes({ ok: true });
+  }
+
   return jsonRes({ error: 'not found' }, 404);
 }
 

@@ -21,11 +21,16 @@ export const FIXED = {
   sessionDays: 7,
   loginMaxFails: 5,
   loginLockMs: 15 * 60 * 1000,
+  skillMaxInject: 6000,
+  moduleMaxCode: 20000,
+  siteApiPerMinute: 60,
 };
 
 export const ENV_VARS = ['ADMIN_USER', 'ADMIN_PASS'];
 
 export const KV_TOTAL_BYTES = 1024 * 1024 * 1024;
+
+export const ARCHITECTURES = ['html', 'prefab', 'custom'];
 
 export const DEFAULT_SETTINGS = {
   llm: {
@@ -39,15 +44,43 @@ export const DEFAULT_SETTINGS = {
     timeLimitEnabled: false,
     maxSeconds: 600,
     compressChars: 6000,
+    systemPrompt: '',
+    workflow: '',
   },
-  search: { url: '', key: '', headers: {}, results: 5 },
-  extract: { url: '', key: '', headers: {}, format: '' },
+  search: {
+    enabled: true,
+    baseUrl: '',
+    key: '',
+    headers: {},
+    results: 5,
+    searchPath: '/search',
+    readerPath: '/reader',
+    readerFormat: '',
+    mergeReader: true,
+    response: { results: '', title: '', url: '', snippet: '', content: '' },
+    provider: 'auto',
+  },
+  storage: {
+    initialized: false,
+    cacheKV: true,
+    stores: [],
+  },
   dashboard: { url: 'https://manage.nexacode.dpdns.org/api/dashboard' },
-  qq: { appId: '', appSecret: '', mode: 'websocket', sandbox: false, intents: 33554432, answerDelivery: 'auto' },
+  qq: { appId: '', appSecret: '', mode: 'webhook', sandbox: false, intents: 33554432, answerDelivery: 'auto' },
   persona: '',
   admin: { openIds: [], groupAdmins: false },
-  groups: { allowAll: false, list: [] },
-  agent: { concurrency: 4, budgetSeconds: 0 },
+  groups: {
+    allowAll: false,
+    list: [],
+    cacheEnabled: true,
+    cachePerGroup: 300,
+    cacheRetentionDays: 7,
+  },
+  agent: {
+    concurrency: 4,
+    budgetSeconds: 0,
+    architectures: ['html'],
+  },
   deploy: {
     ttlSeconds: 600,
     extendSeconds: 600,
@@ -58,6 +91,7 @@ export const DEFAULT_SETTINGS = {
     writesPerDay: 200,
     maxPerDay: 50,
     allowData: true,
+    apiPerMinute: 60,
   },
   logs: { debug: false, retentionDays: 7, maxRows: 8000 },
   site: { publicBaseUrl: '' },
@@ -74,6 +108,7 @@ export function loadEnv(env = {}) {
     adminPass: str(env, 'ADMIN_PASS'),
     hasDB: !!env?.DB,
     hasKV: !!env?.STORE,
+    hasR2: !!env?.R2,
     hasCore: !!env?.BOT_CORE,
   };
 }
@@ -100,15 +135,43 @@ export function trimSlash(s) {
   return String(s || '').replace(/\/+$/, '');
 }
 
+/**
+ * 从一个「带 /v1 的 url」推导出搜索与网页读取两个端点。
+ * 例:https://api.x.com/v1 -> search=https://api.x.com/v1/search, reader=https://api.x.com/v1/reader
+ * 如果用户直接填了带 /search 或 /reader 后缀的地址,就按填的来。
+ */
+export function deriveEndpoints(baseUrl, searchPath = '/search', readerPath = '/reader') {
+  let base = trimSlash(baseUrl);
+  let sp = String(searchPath || '/search').trim() || '/search';
+  let rp = String(readerPath || '/reader').trim() || '/reader';
+  if (!sp.startsWith('/')) sp = '/' + sp;
+  if (!rp.startsWith('/')) rp = '/' + rp;
+  if (base.endsWith(sp)) base = base.slice(0, -sp.length);
+  else if (base.endsWith(rp)) base = base.slice(0, -rp.length);
+  base = trimSlash(base);
+  return {
+    base,
+    searchUrl: base ? `${base}${sp}` : '',
+    readerUrl: base ? `${base}${rp}` : '',
+  };
+}
+
 export function flatten(settings, env = {}) {
   const e = loadEnv(env);
   const llm = settings.llm || {};
   const qq = settings.qq || {};
   const dep = settings.deploy || {};
+  const search = settings.search || {};
+  const groups = settings.groups || {};
+  const agent = settings.agent || {};
   const sandbox = qq.sandbox === true;
   const override = env?.QQ_API_BASE ? String(env.QQ_API_BASE).replace(/\/+$/, '') : '';
   const apiBase = override || (sandbox ? FIXED.sandboxApiBase : FIXED.apiBase);
   const tokenUrl = override ? `${override}/app/getAppAccessToken` : FIXED.tokenUrl;
+  const endpoints = deriveEndpoints(search.baseUrl, search.searchPath, search.readerPath);
+  const architectures = Array.isArray(agent.architectures)
+    ? agent.architectures.filter((a) => ARCHITECTURES.includes(a))
+    : ['html'];
   return {
     ...FIXED,
     apiBase,
@@ -119,7 +182,7 @@ export function flatten(settings, env = {}) {
     adminPass: e.adminPass,
     appId: String(qq.appId || '').trim(),
     appSecret: String(qq.appSecret || '').trim(),
-    mode: qq.mode === 'webhook' ? 'webhook' : 'websocket',
+    mode: qq.mode === 'websocket' ? 'websocket' : 'webhook',
     intents: Number(qq.intents) || 33554432,
     llmBaseUrl: trimSlash(llm.baseUrl),
     llmApiKey: String(llm.apiKey || '').trim(),
@@ -127,14 +190,21 @@ export function flatten(settings, env = {}) {
     llmHeaders: llm.headers && typeof llm.headers === 'object' ? llm.headers : {},
     reasoningEffort: llm.deepThinking === false ? 'none' : (llm.reasoningEffort || 'max'),
     deepThinking: llm.deepThinking !== false,
-    searchApiUrl: String(settings.search?.url || '').trim(),
-    searchApiKey: String(settings.search?.key || '').trim(),
-    searchHeaders: settings.search?.headers && typeof settings.search.headers === 'object' ? settings.search.headers : {},
-    searchResults: Math.max(1, Math.min(10, Number(settings.search?.results) || FIXED.searchResults)),
-    extractUrl: trimSlash(settings.extract?.url),
-    extractKey: String(settings.extract?.key || '').trim(),
-    extractHeaders: settings.extract?.headers && typeof settings.extract.headers === 'object' ? settings.extract.headers : {},
-    extractFormat: String(settings.extract?.format || '').trim(),
+    systemPrompt: String(llm.systemPrompt || ''),
+    workflow: String(llm.workflow || ''),
+    searchEnabled: search.enabled !== false,
+    searchBaseUrl: endpoints.base,
+    searchApiUrl: endpoints.searchUrl,
+    readerApiUrl: endpoints.readerUrl,
+    searchApiKey: String(search.key || '').trim(),
+    searchHeaders: search.headers && typeof search.headers === 'object' ? search.headers : {},
+    searchResults: Math.max(1, Math.min(10, Number(search.results) || FIXED.searchResults)),
+    searchMergeReader: search.mergeReader !== false,
+    searchReaderFormat: String(search.readerFormat || ''),
+    searchResponse: search.response && typeof search.response === 'object' ? search.response : {},
+    searchProvider: String(search.provider || 'auto'),
+    storageStores: Array.isArray(settings.storage?.stores) ? settings.storage.stores : [],
+    storageCacheKV: settings.storage?.cacheKV !== false,
     dashboardUrl: String(settings.dashboard?.url || '').trim(),
     persona: String(settings.persona || ''),
     publicBaseUrl: trimSlash(settings.site?.publicBaseUrl),
@@ -142,8 +212,15 @@ export function flatten(settings, env = {}) {
     llmMaxSeconds: Math.max(5, Number(llm.maxSeconds) || 600),
     compressChars: Math.max(1000, Number(llm.compressChars) || FIXED.compressChars),
     answerDelivery: qq.answerDelivery === 'active' ? 'active' : 'auto',
-    agentConcurrency: Math.max(1, Math.min(10, Number(settings.agent?.concurrency) || 4)),
-    agentBudgetMs: Math.max(0, Number(settings.agent?.budgetSeconds) || 0) * 1000,
+    agentConcurrency: Math.max(1, Math.min(10, Number(agent.concurrency) || 4)),
+    agentBudgetMs: Math.max(0, Number(agent.budgetSeconds) || 0) * 1000,
+    architectures,
+    canDeploy: architectures.includes('html') || architectures.includes('prefab') || architectures.includes('custom'),
+    canPrefab: architectures.includes('prefab'),
+    canCustomBackend: architectures.includes('custom'),
+    groupsCacheEnabled: groups.cacheEnabled !== false,
+    groupsCachePerGroup: Math.max(20, Math.min(2000, Number(groups.cachePerGroup) || 300)),
+    groupsCacheRetentionDays: Math.max(1, Math.min(90, Number(groups.cacheRetentionDays) || 7)),
     maxSites: Number(dep.maxProjects) || 5,
     idLen: FIXED.idLen,
     idCharset: FIXED.idCharset,
@@ -153,6 +230,7 @@ export function flatten(settings, env = {}) {
     reserveBytes: Number(dep.reserveBytes) || 64 * 1024 * 1024,
     dataQuotaBytes: Number(dep.dataQuotaBytes) || 256 * 1024,
     allowData: dep.allowData !== false,
+    apiPerMinute: Math.max(10, Math.min(600, Number(dep.apiPerMinute) || FIXED.siteApiPerMinute)),
     settings,
   };
 }

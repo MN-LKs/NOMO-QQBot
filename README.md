@@ -1,4 +1,4 @@
-# NPAPI
+# NOMO-QQBot
 
 QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 
@@ -14,10 +14,10 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 
 **两种连接方式,面板里随时切**
 
-- **WebSocket(默认,推荐)**:机器人主动连腾讯的网关。不需要去开放平台填回调地址,
-  也就不会把任何一个公网地址暴露出去,别人找不到、打不着。断线自动重连,每 2 分钟兜底检查一次。
-- **WebHook(可选)**:传统回调模式。需要去开放平台填地址,面板会把回调地址算好给你复制。
-  如果域名前面挂着 Cloudflare 的质询,记得按 [docs/DEPLOY.md](docs/DEPLOY.md) 里的说明放行。
+- **WebHook(默认)**:腾讯把消息推到你的 Worker。没人说话时 Durable Object 完全休眠,
+  不占 Cloudflare 额度;需要在 QQ 开放平台填一个回调地址(面板会把地址算好给你复制)。
+- **WebSocket(可选)**:机器人主动连腾讯的网关,不需要开放平台配置、公网不暴露入口;
+  代价是常驻连接会持续消耗 Durable Object 时长(免费额度 24 小时约吃掉八成)。
 
 **管理面板**(`/administrator`)
 
@@ -32,20 +32,23 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 **AI Agent 能力**
 
 - 聊天、答疑、翻译、写文案、算数(算术走工具,不心算)
-- 联网搜索 + 读网页正文
+- 联网搜索 + 读网页正文:一个「到 /v1 为止」的接口地址,搜索自动走 `/search`、读取自动走 `/reader`;
+  支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别,其余走通用模式
 - 写代码并**直接部署成公网网页**,给用户一个能打开的链接
 - 沙盒草稿区:先写文件、再改、最后一次性部署
+- 群聊记忆:能查群消息缓存、按关键词找群(配合 QQ 后台的「机器人可查询群内所有消息」食用更佳)
+- 中转站用量查询(面板里填中转站的面板地址)
 - 记住群里的约定(说「记住 xxx」),上下文自动压缩
 - MCP 工具、掷骰子抽签、编解码、JSON 格式化
 - 非流式长任务:单次请求默认**不设时间上限**,多轮工具调用、多次非流式慢慢跑完;
-  想限时的话,设置里有开关和最大秒数(以秒为单位)。多条消息并行处理,互不堵塞
+  想限时的话,设置里有开关和最大秒数。多条消息并行处理,互不堵塞
 
 **部署项目**
 
 - 纯静态 HTML / CSS / JS,不跑服务端代码
-- 数据存在 KV,文本自动 gzip 压缩(96 字节起),页面直读不查库,加载更快
+- 文件优先存 R2(绑了的话),否则 KV;文本自动 gzip 压缩,页面直读不查库,加载更快
 - 空间按「固定保留 + 每项目保底 + 动态池」分配,动态池按访问量优先给忙的项目
-- 到期自动销毁,删除时连同 KV 与 D1 里的数据一起清干净
+- 到期自动销毁,删除时连同存储与 D1 里的数据一起清干净
 - 页面还能用 `/__data/<键>` 存一点小数据(默认每个项目 256 KB)
 - 面板里填好**站点域名**后,机器人给你的部署链接就是完整可点的网址
 
@@ -54,18 +57,22 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 ## 快速开始
 
 1. **Fork / 导入这个仓库**,在 Cloudflare 后台创建 Worker 并连上仓库
-2. 创建 **D1 数据库**(名字随意,比如 `npapi`)和 **KV 命名空间**(比如 `npapi-store`)
+2. 创建 **D1 数据库**(比如 `nomo-qqbot`)和 **KV 命名空间**(比如 `nomo-qqbot-store`);
+   可选再建一个 **R2 存储桶**(绑上之后部署文件优先存 R2,免费额度 10 GB)
 3. 在 Worker 的 **Settings → Bindings** 里绑定:
    - D1 database → 变量名 **`DB`**
    - KV namespace → 变量名 **`STORE`**
+   - R2 bucket → 变量名 **`R2`**(可选)
 4. 在 **Settings → Variables** 里加两个变量:
    - `ADMIN_USER` 面板用户名
    - `ADMIN_PASS` 面板密码(请用长一点的)
 5. 部署完成后打开 `https://<你的域名>/administrator`,用上面那对账号登录
 6. 在面板的**设置**里填:AI 接口(地址 + Key + 模型)、QQ 的 APPID 与 AppSecret
-7. 连接方式保持 **WebSocket**,保存。回首页看系统信息里是否已连上
+7. 连接方式保持 **WebHook**(默认),把面板算好的回调地址填到 QQ 开放平台;
+   或者切成 **WebSocket**,不用填任何回调地址
+8. 点保存并应用,回首页看系统信息
 
-详细步骤(含每一步的截图级说明和排错)看 [docs/DEPLOY.md](docs/DEPLOY.md)。
+详细步骤(含每一步的说明和排错)看 [docs/DEPLOY.md](docs/DEPLOY.md)。
 
 ---
 
@@ -90,12 +97,13 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 
 ```bash
 npm install
-npm test              # 单元测试(纯逻辑,103 项)
-npm run test:integration   # 集成测试(假上游 + 真 Worker 代码,57 项)
-npm run test:all      # 敏感信息扫描 + 上面两套
+npm test                   # 单元测试(纯逻辑,144 项)
+npm run test:jsmini        # 沙盒 JS 解释器测试(59 项)
+npm run test:integration   # 集成测试(假上游 + 真 Worker 代码,68 项)
+npm run test:all           # 敏感信息扫描 + 上面全部
 ```
 
-集成测试会自己起三个假服务器(QQ 开放平台、大模型接口、MCP 服务器),
+集成测试会自己起假服务器(QQ 开放平台、大模型接口、MCP 服务器),
 然后用 `node:sqlite` 顶掉 D1 与 Durable Object 的 SQLite,
 所以不需要任何线上资源就能把整条链路跑一遍。
 
@@ -106,14 +114,15 @@ npm run test:all      # 敏感信息扫描 + 上面两套
 ```
 src/
   index.js         Worker 入口:面板、回调、部署页面的路由
-  config.js        两个环境变量 + 常量 + 默认设置
-  store/           D1 与 KV 的数据层(设置、日志、统计、项目、文件)
+  config.js        环境变量 + 常量 + 默认设置(面板里能改的一切)
+  serve.js         部署页面的服务逻辑(含 /__data/ 接口)
+  store/           D1 与存储的数据层(设置、日志、统计、项目、文件、存储桶、模块)
   panel/           管理面板:鉴权、接口、前端页面
   qq/              腾讯开放平台:网关、回调验签、发消息
-  core/            Durable Object:队列、会话上下文、沙盒、WebSocket 宿主
-  agent/           AI Agent:模型调用、工具、MCP、搜索、提示词
+  core/            Durable Object:队列、会话上下文、沙盒、群消息缓存;jsmini 沙盒解释器
+  agent/           AI Agent:模型调用、工具、扩展、技能、MCP、搜索、提示词
   util/            文本、计算、编码等小工具
-test/              单元测试 + 集成测试
+test/              单元测试 + 沙盒测试 + 集成测试
 tools/             敏感信息扫描
 ```
 

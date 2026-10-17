@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, deepMerge, flatten } from '../config.js';
+import { DEFAULT_SETTINGS, deepMerge, deriveEndpoints, flatten } from '../config.js';
 import { ensureSchema, one, run } from './db.js';
 
 let cache = null;
@@ -8,6 +8,28 @@ const TTL = 5000;
 export function invalidate() {
   cache = null;
   cacheAt = 0;
+}
+
+// 旧版本(v3)把搜索和网页读取拆成 search.url / extract.url 两套配置。
+// v4 合并成一个「带 /v1 的 url」,这里把旧数据搬过去,保证升级后不用重新填。
+function migrateLegacy(out) {
+  const search = out.search && typeof out.search === 'object' ? out.search : null;
+  const extract = out.extract && typeof out.extract === 'object' ? out.extract : null;
+  if (search && search.url && !search.baseUrl) {
+    const ep = deriveEndpoints(search.url, search.searchPath, search.readerPath);
+    search.baseUrl = ep.base;
+  }
+  if (!out.search && extract && extract.url) {
+    out.search = {};
+  }
+  if (extract && extract.url && out.search && !out.search.baseUrl) {
+    const ep = deriveEndpoints(extract.url, out.search.searchPath, out.search.readerPath);
+    out.search.baseUrl = ep.base;
+  }
+  if (out.search && !out.search.key && extract && extract.key) {
+    out.search.key = extract.key;
+  }
+  return out;
 }
 
 export async function getRaw(env, { fresh = false } = {}) {
@@ -23,6 +45,7 @@ export async function getRaw(env, { fresh = false } = {}) {
       out[r.k] = null;
     }
   }
+  migrateLegacy(out);
   cache = deepMerge(structuredClone(DEFAULT_SETTINGS), out);
   cacheAt = Date.now();
   return cache;
@@ -65,5 +88,10 @@ export function maskSecrets(settings) {
   if (out.search?.key) out.search.key = mask(out.search.key);
   if (out.extract?.key) out.extract.key = mask(out.extract.key);
   if (out.qq?.appSecret) out.qq.appSecret = mask(out.qq.appSecret);
+  if (Array.isArray(out.storage?.stores)) {
+    for (const s of out.storage.stores) {
+      if (s && s.secretKey) s.secretKey = mask(s.secretKey);
+    }
+  }
   return out;
 }

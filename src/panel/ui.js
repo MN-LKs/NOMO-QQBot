@@ -5,7 +5,7 @@ export function loginPage({ error = '', hint = '' } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>登录 · NPAPI 管理面板</title>
+<title>登录 · NOMO-QQBot 管理面板</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:14px/1.6 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0;
@@ -32,7 +32,7 @@ border-radius:8px;font-size:13px;margin-bottom:16px}
 </head>
 <body>
 <form class="box" id="f">
-  <div class="logo"><b>NPAPI</b><span>管理面板</span></div>
+  <div class="logo"><b>NOMO</b><span>管理面板</span></div>
   <h1>请登录以继续</h1>
   ${error ? `<div class="err">${esc(error)}</div>` : ''}
   <div class="field">
@@ -78,7 +78,7 @@ export function panelPage({ user = '' } = {}) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>NPAPI 管理面板</title>
+<title>NOMO-QQBot 管理面板</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{--bg:#f1f5f9;--card:#fff;--line:#e2e8f0;--txt:#0f172a;--dim:#64748b;--pri:#2563eb;--ok:#16a34a;--warn:#d97706;--bad:#dc2626}
@@ -208,7 +208,7 @@ font-family:ui-monospace,Menlo,Consolas,monospace;align-items:flex-start}
   <aside id="sb">
     <div class="brand">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" stroke-width="2"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
-      <div><b>NPAPI</b><br><i>管理面板</i></div>
+      <div><b>NOMO</b><br><i>管理面板</i></div>
     </div>
     <nav id="nav"></nav>
     <div class="me" id="me"></div>
@@ -232,7 +232,7 @@ var S={route:'home',data:{},settings:null,overview:null};
 function el(id){return document.getElementById(id)}
 function h(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function toast(m){var t=el('toast');t.textContent=m;t.classList.add('on');clearTimeout(t._t);t._t=setTimeout(function(){t.classList.remove('on')},2200)}
-function api(p,opt){opt=opt||{};opt.headers=Object.assign({'X-Requested-With':'npapi'},opt.headers||{});
+function api(p,opt){opt=opt||{};opt.headers=Object.assign({'X-Requested-With':'nomo'},opt.headers||{});
  if(opt.body&&typeof opt.body!=='string'){opt.body=JSON.stringify(opt.body);opt.headers['Content-Type']='application/json'}
  return fetch(API+p,opt).then(function(r){
    if(r.status===401){location.href='/administrator';return Promise.reject(new Error('未登录'))}
@@ -486,8 +486,9 @@ function pageSettings(){
  setTitle('设置');
  var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
  loadSettings(true).then(function(d){
-  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,ex=s.extract||{},dash=s.dashboard||{};
+  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,dash=s.dashboard||{};
   var headers=function(o){return h(JSON.stringify(o||{},null,0))};
+  var mapObj=se.response||{},mapText=Object.keys(mapObj).some(function(k){return mapObj[k]})?JSON.stringify(mapObj):'';
   v.innerHTML=
   '<div class="card"><h3>AI 接口</h3><div class="sub">机器人的大模型接口,支持任意 OpenAI 兼容的 /chat/completions</div>'+
    '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="llm-url" value="'+h(llm.baseUrl)+'" placeholder="https://api.example.com/v1"></div>'+
@@ -505,17 +506,18 @@ function pageSettings(){
    '<div><label class="f">最大秒数(开启限时后生效)</label><input class="t" type="number" id="llm-secs" value="'+(llm.maxSeconds||600)+'"></div></div>'+
    '<button class="btn pri" id="llm-save">保存</button></div>'+
 
-  '<div class="card"><h3>联网搜索</h3><div class="sub">关键词搜索:支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别</div>'+
-   '<div class="fld"><label class="f">搜索接口地址</label><input class="t mono" id="se-url" value="'+h(se.url)+'" placeholder="https://api.example.com/search"></div>'+
+  '<div class="card"><h3>联网搜索</h3><div class="sub">填一个「到 /v1 为止」的接口地址:关键词搜索自动走 /search,网页读取自动走 /reader。支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别,其余走通用模式</div>'+
+   '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="se-base" value="'+h(se.baseUrl||'')+'" placeholder="https://api.example.com/v1"></div>'+
    '<div class="fld"><label class="f">API Key</label><input class="t mono" id="se-key" value="'+h(se.key)+'"></div>'+
+   '<div class="row"><div><label class="f">搜索路径</label><input class="t mono" id="se-spath" value="'+h(se.searchPath||'/search')+'" placeholder="/search"></div>'+
+   '<div><label class="f">读取路径</label><input class="t mono" id="se-rpath" value="'+h(se.readerPath||'/reader')+'" placeholder="/reader"></div></div>'+
+   '<div class="row"><div><label class="f">每次搜索返回条数(1-10)</label><input class="t" type="number" min="1" max="10" id="se-results" value="'+(se.results||5)+'"></div>'+
+   '<div><label class="f">读取请求的 format 字段(可留空)</label><input class="t mono" id="se-format" value="'+h(se.readerFormat||'')+'" placeholder="json / markdown / text"></div></div>'+
    '<div class="fld"><label class="f">自定义请求头(JSON)</label><textarea class="t mono" id="se-headers">'+headers(se.headers)+'</textarea></div>'+
-   '<div class="fld"><label class="f">每次搜索返回条数(1-10)</label><input class="t" type="number" min="1" max="10" id="se-results" value="'+(se.results||5)+'"></div>'+
-   '<div class="hint" style="margin:14px 0 8px">网页查询 API(可选):配置后,fetch_url 会优先用它来读页面——适合抓 JS 动态渲染、直接抓取拿不到正文的站点。请求约定:POST 该地址,body 为 {"url":"目标网址","format":"下面的返回结构"};返回 JSON 时自动提取 content/text/markdown 等字段。</div>'+
-   '<div class="fld"><label class="f">网页查询接口地址</label><input class="t mono" id="ex-url" value="'+h(ex.url||'')+'" placeholder="https://reader.example.com/api"></div>'+
-   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ex-key" value="'+h(ex.key||'')+'"></div>'+
-   '<div class="fld"><label class="f">返回结构(format 字段,可留空)</label><input class="t mono" id="ex-format" value="'+h(ex.format||'')+'" placeholder="json / markdown / text"></div>'+
-   '<div class="fld"><label class="f">自定义请求头(JSON)</label><textarea class="t mono" id="ex-headers">'+headers(ex.headers)+'</textarea></div>'+
-   '<button class="btn pri" id="se-save">保存</button> <button class="btn" id="se-test">测试搜索</button></div>'+
+   '<div class="fld"><label class="f">返回结构映射(JSON,可留空)</label><textarea class="t mono" id="se-map">'+h(mapText)+'</textarea><div class="small dim" style="margin-top:4px">默认自动从常见字段名里找;识别不出时照「测试搜索」结果里的原始片段填,例如 {"results":"data.items","title":"name"}</div></div>'+
+   '<div class="line"><div class="g"><b>启用联网搜索</b><span>关闭后机器人不再联网,凭已有知识回答</span></div>'+sw(se.enabled!==false,'data-t="seEnabled"')+'</div>'+
+   '<div class="line"><div class="g"><b>搜索后附第一条正文</b><span>自动抓第一条结果的网页正文,回答更准;会多花一次请求</span></div>'+sw(se.mergeReader!==false,'data-t="seMerge"')+'</div>'+
+   '<button class="btn pri" id="se-save">保存</button> <button class="btn" id="se-test">测试搜索与读取</button> <span class="small dim">测试用的是已保存的配置</span></div>'+
 
   '<div class="card"><h3>人设提示词</h3><div class="sub">留空使用默认人设。这段文字会作为系统提示词的一部分发给模型</div>'+
    '<textarea class="t" id="persona" style="min-height:120px">'+h(s.persona)+'</textarea>'+
@@ -528,8 +530,8 @@ function pageSettings(){
     '<option value="prod"'+(qq.sandbox?'':' selected')+'>正式环境(机器人已上线)</option>'+
     '<option value="sandbox"'+(qq.sandbox?' selected':'')+'>沙箱环境(还在开发调试)</option></select></div>'+
    '<div class="fld"><label class="f">连接方式</label><select class="t" id="qq-mode">'+
-    '<option value="websocket"'+(qq.mode!=='webhook'?' selected':'')+'>WebSocket(推荐,无需开放平台配置)</option>'+
-    '<option value="webhook"'+(qq.mode==='webhook'?' selected':'')+'>WebHook(需要在开放平台填回调地址)</option></select></div>'+
+    '<option value="webhook"'+(qq.mode==='webhook'?' selected':'')+'>WebHook(默认:闲时休眠不占额度;需在开放平台填回调地址)</option>'+
+    '<option value="websocket"'+(qq.mode!=='webhook'?' selected':'')+'>WebSocket(无需开放平台配置;常驻连接持续消耗 DO 时长)</option></select></div>'+
    '<div class="fld"><label class="f">结果投递方式</label><select class="t" id="qq-delivery">'+
     '<option value="auto"'+(qq.answerDelivery!=='active'?' selected':'')+'>自动(被动窗口内被动回复,超时改用主动消息)</option>'+
     '<option value="active"'+(qq.answerDelivery==='active'?' selected':'')+'>总是主动消息(耗每月额度,慎用)</option></select></div>'+
@@ -615,11 +617,12 @@ function bindSettings(v){
   }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='获取模型列表'})};
  v.querySelector('#llm-test').onclick=function(){testLLM(v)};
  v.querySelector('#se-save').onclick=function(){var b=this;var hh;try{hh=jparse(v.querySelector('#se-headers').value,{})}catch(e){return}
-  var eh;try{eh=jparse(v.querySelector('#ex-headers').value,{})}catch(e){return}
-  save({search:{url:v.querySelector('#se-url').value.trim(),key:v.querySelector('#se-key').value.trim(),headers:hh,
-    results:Math.max(1,Math.min(10,Number(v.querySelector('#se-results').value)||5))},
-   extract:{url:v.querySelector('#ex-url').value.trim(),key:v.querySelector('#ex-key').value.trim(),headers:eh,
-    format:v.querySelector('#ex-format').value.trim()}},b)};
+  var mv=v.querySelector('#se-map').value.trim(),mm={results:'',title:'',url:'',snippet:'',content:''};
+  if(mv){try{mm=JSON.parse(mv)}catch(e){toast('返回结构映射不是合法 JSON');return}}
+  save({search:{baseUrl:v.querySelector('#se-base').value.trim(),key:v.querySelector('#se-key').value.trim(),
+    searchPath:v.querySelector('#se-spath').value.trim()||'/search',readerPath:v.querySelector('#se-rpath').value.trim()||'/reader',
+    results:Math.max(1,Math.min(10,Number(v.querySelector('#se-results').value)||5)),
+    readerFormat:v.querySelector('#se-format').value.trim(),headers:hh,response:mm}},b)};
  v.querySelector('#se-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
   api('/test-search',{method:'POST',body:{query:'今天有什么新闻'}}).then(function(r){
    modal('搜索测试结果','<pre class="code">'+h(JSON.stringify(r,null,2))+'</pre>','<button class="btn" data-x>关闭</button>')
@@ -645,6 +648,8 @@ function bindSettings(v){
  tog('[data-t="groupAdmins"]',['admin','groupAdmins']);
  tog('[data-t="allowData"]',['deploy','allowData']);
  tog('[data-t="debug"]',['logs','debug']);
+ tog('[data-t="seEnabled"]',['search','enabled']);
+ tog('[data-t="seMerge"]',['search','mergeReader']);
  v.querySelector('#gr-addb').onclick=function(){var id=v.querySelector('#gr-add').value.trim();if(!id)return;
   api('/groups',{method:'POST',body:{openid:id,action:'add'}}).then(function(){toast('已添加');render()}).catch(function(e){toast(e.message)})};
  v.querySelector('#ad-addb').onclick=function(){var id=v.querySelector('#ad-add').value.trim();if(!id)return;
@@ -724,9 +729,9 @@ function pageLogs(){
   v.querySelector('[data-dbg]').onclick=function(){var on=!this.classList.contains('on');
    api('/settings',{method:'POST',body:{logs:{debug:on}}}).then(function(){toast('调试模式已'+(on?'开启':'关闭'));render()})};
   v.querySelector('[data-dl]').onclick=function(){
-   fetch('/administrator/api/logs/download',{headers:{'X-Requested-With':'npapi'}}).then(function(r){return r.blob()})
+   fetch('/administrator/api/logs/download',{headers:{'X-Requested-With':'nomo'}}).then(function(r){return r.blob()})
    .then(function(b){var a=document.createElement('a');a.href=URL.createObjectURL(b);
-    a.download='npapi-logs-'+new Date().toISOString().slice(0,10)+'.txt';a.click();toast('已开始下载')})};
+    a.download='nomo-logs-'+new Date().toISOString().slice(0,10)+'.txt';a.click();toast('已开始下载')})};
   v.querySelector('[data-cp]').onclick=function(){
    var txt=d.logs.map(function(l){return ts2s(l.ts)+' ['+l.level+'] '+l.msg}).join('\\n');
    navigator.clipboard.writeText(txt).then(function(){toast('已复制 '+d.logs.length+' 条')})};

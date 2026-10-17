@@ -226,6 +226,15 @@ Object.assign(BotCore.prototype, {
 
     log(`[收到] ${p.scene} ${p.nickname || p.userId || ''} :: ${truncate(text, 120)}`);
 
+    // 群消息缓存(group_recent / group_find 用):全量接收模式下,没 @机器人 的消息也存下来
+    if (p.scene === 'group' && p.targetId && p.mentioned !== undefined && cfg.groupsCacheEnabled) {
+      try {
+        this.cacheGroupMessage(cfg, p);
+      } catch {
+        /* 缓存失败不影响对话 */
+      }
+    }
+
     // 群内全量消息(没 @机器人,即 QQ 后台开了「机器人可查询群内所有消息」之后推来的每一条)
     // 只有 /AI 开头的才触发 Agent,其余静默忽略 —— 否则整个群聊都会被拿去跑 AI。
     if (p.scene === 'group' && p.mentioned === false && parseAiPrefix(text) === null) {
@@ -332,7 +341,7 @@ Object.assign(BotCore.prototype, {
       core: this,
       convId,
       userText: body,
-      meta: { botName: 'NB-AI', nickname: p.nickname },
+      meta: { botName: 'NOMO', nickname: p.nickname },
       log,
     });
 
@@ -682,6 +691,78 @@ Object.assign(BotCore.prototype, {
   sandboxDelete(path) {
     this.sql.exec('DELETE FROM fs WHERE path = ?', String(path));
     return { ok: true };
+  },
+
+  // -------------------------------------------------------------------------
+  // 群消息缓存:写 + 裁剪 + 查询(group_recent / group_find 两个工具用)
+  // -------------------------------------------------------------------------
+
+  cacheGroupMessage(cfg, p) {
+    const id = String(p.messageId || '');
+    if (!id) return;
+    const dup = this.sql.exec('SELECT id FROM gmsg WHERE id = ?', id).toArray();
+    if (dup.length) return;
+    this.sql.exec(
+      'INSERT INTO gmsg (id, group_id, user_id, user_name, content, ts) VALUES (?, ?, ?, ?, ?, ?)',
+      id, String(p.targetId), String(p.userId || ''), String(p.nickname || '').slice(0, 60),
+      truncate(String(p.text || ''), 2000), Number(p.ts) || Date.now());
+    const max = Math.max(20, Math.min(2000, Number(cfg.groupsCachePerGroup) || 300));
+    const cnt = this.sql.exec('SELECT COUNT(*) AS n FROM gmsg WHERE group_id = ?', p.targetId).toArray();
+    if (cnt.length && Number(cnt[0].n) > max + 50) {
+      this.sql.exec(
+        'DELETE FROM gmsg WHERE group_id = ? AND id NOT IN (SELECT id FROM gmsg WHERE group_id = ? ORDER BY ts DESC LIMIT ?)',
+        p.targetId, p.targetId, max);
+    }
+    const now = Date.now();
+    if (!this._gmsgCleanAt || now - this._gmsgCleanAt > 3600000) {
+      this._gmsgCleanAt = now;
+      const days = Math.max(1, Math.min(90, Number(cfg.groupsCacheRetentionDays) || 7));
+      this.sql.exec('DELETE FROM gmsg WHERE ts < ?', now - days * 86400000);
+    }
+  },
+
+  async groupRecent(group, limit = 20, convId = '') {
+    const n = Math.max(1, Math.min(50, Number(limit) || 20));
+    let gid = String(group || '').trim();
+    if (!gid && String(convId).startsWith('g:')) gid = String(convId).slice(2);
+    if (!gid) return '当前会话不在群里,没法查群消息缓存;请告诉我群名或群 openID。';
+    let rows = this.sql.exec('SELECT * FROM gmsg WHERE group_id = ? ORDER BY ts DESC LIMIT ?', gid, n).toArray();
+    if (!rows.length) {
+      const named = await this.env.DB.prepare(
+        'SELECT openid FROM groups WHERE name LIKE ? OR openid LIKE ? ORDER BY last_seen DESC LIMIT 3',
+      ).bind(`%${gid}%`, `%${gid}%`).all().catch(() => ({ results: [] }));
+      for (const r of named.results || []) {
+        rows = this.sql.exec('SELECT * FROM gmsg WHERE group_id = ? ORDER BY ts DESC LIMIT ?', r.openid, n).toArray();
+        if (rows.length) break;
+      }
+    }
+    if (!rows.length) {
+      return '这个群还没有缓存到消息。需要管理员开启「群消息缓存」,并且在 QQ 后台开启全量消息接收(机器人可查询群内所有消息)。';
+    }
+    const lines = rows.reverse().map((r) => {
+      const t = new Date(Number(r.ts) + 8 * 3600000);
+      const p2 = (x) => String(x).padStart(2, '0');
+      return `${p2(t.getUTCHours())}:${p2(t.getUTCMinutes())} ${r.user_name || r.user_id || '?'}:${r.content}`;
+    });
+    return `群消息缓存(最近 ${lines.length} 条,来自机器人收到的消息):\n${lines.join('\n')}`;
+  },
+
+  async groupFind(keyword) {
+    const kw = String(keyword || '').trim();
+    if (!kw) return '请给我一个关键词。';
+    const rows = await this.env.DB.prepare(
+      'SELECT openid, name, msg_count, last_seen FROM groups WHERE name LIKE ? OR openid LIKE ? ORDER BY last_seen DESC LIMIT 10',
+    ).bind(`%${kw}%`, `%${kw}%`).all().catch(() => ({ results: [] }));
+    const list = rows.results || [];
+    if (!list.length) return `没有找到和「${kw}」相关的群。`;
+    const ago = (ts) => {
+      const d = Math.max(0, Date.now() - Number(ts || 0));
+      if (d < 60000) return `${Math.floor(d / 1000)} 秒前`;
+      if (d < 3600000) return `${Math.floor(d / 60000)} 分钟前`;
+      if (d < 86400000) return `${Math.floor(d / 3600000)} 小时前`;
+      return `${Math.floor(d / 86400000)} 天前`;
+    };
+    return ['找到这些群:', ...list.map((g) => `· ${g.name || '(未命名)'} | openID=${g.openid} | 消息 ${Number(g.msg_count || 0)} 条 | 最近活跃 ${ago(g.last_seen)}`)].join('\n');
   },
 
   async status() {
