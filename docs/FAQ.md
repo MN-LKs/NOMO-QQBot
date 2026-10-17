@@ -31,17 +31,14 @@
 `ADMIN_USER = ""` / `ADMIN_PASS = ""`。`wrangler deploy` 默认会用配置文件里的变量
 覆盖后台,所以每次部署都可能把后台变量冲掉或删掉。
 
-**解决**:这次先把两个空项放回 `wrangler.toml` 的 `[vars]`,让 Cloudflare 重新出现
-`ADMIN_USER` / `ADMIN_PASS` 两个变量名。部署完成后:
+**解决**:先看 Cloudflare 后台有没有这两个变量:
 
-1. 去 Settings → Variables and Secrets,直接给这两个变量填值(类型选 Secret)
-2. 填完后,把 `wrangler.toml` 里的整个 `[vars]` 段删掉,再部署一次
-3. 之后 `keep_vars = true` 会保留后台的值,不会再丢
+1. **有**:直接给它们填值(类型选 Secret),保存后刷新 `/administrator`
+2. **没有**:在后台点 Add 新建两项;或者临时把两个空项写回 `wrangler.toml` 的 `[vars]`,
+   部署一次让它们出现,填完值后**立刻删掉整个 `[vars]` 段**再部署一次
 
-为什么不能一直留着空 `[vars]`?因为 `[vars]` 里的同名值每次部署都会覆盖后台,
-空值会把面板重新锁死。`keep_vars` 只防删除,不防同名覆盖。
-
-如果不想等两次部署,也可以直接在后台点 Add 新建这两项;效果一样。
+最终状态必须是:**没有 `[vars]`,只有后台 Secret + `keep_vars = true`**。
+空 `[vars]` 会在每次部署时覆盖后台,`keep_vars` 只防删除,不防同名覆盖。
 
 ### 打开任何地址都返回 503「服务还没有初始化完成」
 

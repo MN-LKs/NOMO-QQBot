@@ -6,14 +6,6 @@ compatibility_date = "2026-09-01"
 # 管理员账号请用 Secret 类型放在后台,不要写进 [vars]。
 keep_vars = true
 
-# ⚠️ 迁移用:下面两个空项只是为了让 Cloudflare 重新出现变量名。
-# 你填完值后,必须把整个 [vars] 段删掉再部署一次;
-# 否则每次部署都会用空值覆盖你填的值(keep_vars 只防删除,不防同名覆盖)。
-# 最终状态应该是:没有 [vars],只有 keep_vars = true + 后台 Secret。
-[vars]
-ADMIN_USER = ""
-ADMIN_PASS = ""
-
 [observability]
 enabled = true
 
@@ -31,8 +23,8 @@ command = "node tools/strip-docs.js"
 # 不要把 ADMIN_USER / ADMIN_PASS 长期写进 [vars]:
 #   - [vars] 是明文,会跟着代码走;
 #   - [vars] 里的同名值每次部署都会覆盖后台,空值会让面板直接锁死。
-# 上面的 [vars] 只是迁移用:让 Cloudflare 重新出现这两个变量名。
-# 你在后台填完值后,把整个 [vars] 段删掉;之后 keep_vars = true 会保留后台的值。
+# 如果后台变量被删了,可以在后台重新 Add;或者临时把两个空项写回 [vars] 让它们出现,
+# 填完值后立刻删掉 [vars] 再部署。之后 keep_vars = true 会保留后台的值。
 
 # ---------------------------------------------------------------------------
 # 需要两个绑定:D1 数据库(DB)和 KV 命名空间(STORE)。

@@ -92,9 +92,8 @@ https://nomo-qqbot.<你的账号子域>.workers.dev
 只有这两个环境变量。AI 接口、QQ 凭据、搜索 Key 全都在面板里填,存进 D1,
 以后改配置不用重新部署。
 
-> `wrangler.toml` 已设置 `keep_vars = true`,但前提是 `[vars]` 里没有同名空值。
-> 如果仓库里暂时有迁移用的 `[vars]` 空项,填完值后要把整个 `[vars]` 段删掉再部署,
-> 否则空值会覆盖后台。最终状态:没有 `[vars]`,只有后台 Secret + `keep_vars = true`。
+> `wrangler.toml` 已设置 `keep_vars = true`,部署不会清掉后台变量。
+> 前提是 `[vars]` 里没有同名空值;如果你临时加过迁移用的 `[vars]`,填完值后要删掉。
 
 > 千万不要把密码写进 `wrangler.toml` 再提交到公开仓库。
 

@@ -62,9 +62,8 @@ Worker → **Settings** → **Variables and Secrets**,加两条(建议都用 **S
 
 就这两个。其它配置都在面板里填,存进 D1,不会再出现在环境变量里。
 
-> `wrangler.toml` 已设置 `keep_vars = true`,但它只防删除,不防同名覆盖。
-> 如果仓库里暂时有迁移用的 `[vars]` 空项,填完值后要把整个 `[vars]` 段删掉再部署,
-> 否则空值会覆盖后台。最终状态:没有 `[vars]`,只有后台 Secret + `keep_vars = true`。
+> `wrangler.toml` 已设置 `keep_vars = true`,部署不会清掉后台变量。
+> 前提是 `[vars]` 里没有同名空值;如果你临时加过迁移用的 `[vars]`,填完值后要删掉。
 
 > 没配这两个变量时,面板会显示「登录功能已关闭」的锁定页,而不是一个登不进去的表单。
 

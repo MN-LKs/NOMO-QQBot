@@ -69,7 +69,7 @@ eq('空白管理员变量也算缺失', missingEnv({ ADMIN_USER: '   ', ADMIN_PA
   ok('wrangler.toml 开启 keep_vars', /^keep_vars\s*=\s*true/m.test(toml));
   // 迁移期允许 [vars] 里有空值(为了让 CF 重新出现变量名),但绝不能有真实值。
   const varLines = toml.split('\n').filter((l) => /^ADMIN_(?:USER|PASS)\s*=/.test(l));
-  ok('[vars] 的管理员值只能是空字符串', varLines.every((l) => /=\s*""\s*$/.test(l)));
+  ok('[vars] 里不能出现真实管理员值', varLines.every((l) => /=\s*""\s*$/.test(l)));
   const jsmini = fs.readFileSync(path.join(ROOT, 'test/jsmini.test.mjs'), 'utf8');
   ok('jsmini 测试没有本机绝对路径', !/['"`]\/(?:workspace|home|Users)\//.test(jsmini));
 }
