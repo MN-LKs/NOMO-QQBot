@@ -76,6 +76,22 @@ function checkSyntax(file) {
 const IMPORT_RE = /(?:^|[^\w$])(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"](\.[^'"]+)['"]/g;
 const DYNAMIC_RE = /\bimport\s*\(\s*['"](\.[^'"]+)['"]\s*\)/g;
 
+// 本机绝对路径在 GitHub Actions / Cloudflare 构建里一定不存在。
+// 只检查引号里的路径,避免把普通 URL 里的 /home/ 误判。
+const ABS_PATH_PATTERNS = [
+  /(['"`])\/workspace\//,
+  /(['"`])\/home\/[A-Za-z0-9._-]+\//,
+  /(['"`])\/Users\/[A-Za-z0-9._-]+\//,
+  /(['"`])[A-Za-z]:\\Users\\/,
+];
+
+function checkAbsolutePaths(file, code) {
+  for (const re of ABS_PATH_PATTERNS) {
+    const m = code.match(re);
+    if (m) errors.push(`硬编码绝对路径 ${rel(file)}: ${m[0]}…(换成本文件相对路径)`);
+  }
+}
+
 function resolveSpecifier(fromFile, spec) {
   const base = path.resolve(path.dirname(fromFile), spec);
   const candidates = [base, `${base}.js`, `${base}.mjs`, `${base}.json`, path.join(base, 'index.js')];
@@ -170,7 +186,9 @@ for (const f of files) {
   if (!/\.(?:js|mjs)$/i.test(f)) continue;
   jsCount++;
   checkSyntax(f);
-  checkImports(f, fs.readFileSync(f, 'utf8'));
+  const code = fs.readFileSync(f, 'utf8');
+  checkAbsolutePaths(f, code);
+  checkImports(f, code);
 }
 
 for (const f of walk(ROOT)) {

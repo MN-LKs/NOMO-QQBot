@@ -1,4 +1,4 @@
-import { runProgram, formatValue } from '/workspace/QQ/src/core/jsmini-run.js';
+import { runProgram, formatValue } from '../src/core/jsmini-run.js';
 
 let pass = 0, fail = 0;
 async function t(name, code, expect, opts = {}) {

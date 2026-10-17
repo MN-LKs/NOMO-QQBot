@@ -2,6 +2,10 @@ name               = "nomo-qqbot"
 main               = "src/index.js"
 compatibility_date = "2026-09-01"
 
+# 保留 Cloudflare 后台手动添加的变量/密钥,避免每次部署被清空。
+# 管理员账号请用 Secret 类型放在后台,不要写进 [vars]。
+keep_vars = true
+
 [observability]
 enabled = true
 
@@ -14,14 +18,13 @@ enabled = true
 command = "node tools/strip-docs.js"
 
 # 管理员账号请在 Cloudflare 后台设置(Settings → Variables and Secrets),
-# 或者用 `npx wrangler secret put ADMIN_USER` / `ADMIN_PASS` 写入。
+# 类型选 Secret;或者用 `npx wrangler secret put ADMIN_USER` / `ADMIN_PASS` 写入。
 #
-# 注意:不要把空值写进 [vars] —— 每次部署都会用文件里的值覆盖后台设置,
-# 空的 ADMIN_USER / ADMIN_PASS 会让面板直接锁死(显示「登录功能已关闭」)。
-# 确实想用文件管理的话,取消下面两行注释并填值(提交前记得清掉真实密码):
-# [vars]
-# ADMIN_USER = ""
-# ADMIN_PASS = ""
+# 不要把 ADMIN_USER / ADMIN_PASS 写进 [vars]:
+#   - [vars] 是明文,会跟着代码走;
+#   - 旧版本这里写过两个空值,每次部署都会把后台变量冲成空,面板直接锁死。
+# 这两个空值已经移除。后台变量被删了也不用改代码,重新添加一次即可;
+# 上面的 keep_vars = true 会保证以后的部署不再清掉它们。
 
 # ---------------------------------------------------------------------------
 # 需要两个绑定:D1 数据库(DB)和 KV 命名空间(STORE)。

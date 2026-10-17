@@ -60,6 +60,14 @@ eq('网关地址由 apiBase 推出', cfg1.gatewayUrl, 'https://api.sgroup.qq.com
 ok('sandbox 标志透传', flatten(deepMerge(DEFAULT_SETTINGS, { qq: { sandbox: true } }), env1).sandbox === true);
 ok('默认不是沙箱', cfg1.sandbox === false);
 eq('缺环境变量', missingEnv({}), ['ADMIN_USER', 'ADMIN_PASS']);
+{
+  const toml = fs.readFileSync(path.join(process.cwd(), 'wrangler.toml'), 'utf8');
+  ok('wrangler.toml 开启 keep_vars', /^keep_vars\s*=\s*true/m.test(toml));
+  ok('wrangler.toml 没有活动 [vars]', !/^\[vars\]/m.test(toml));
+  ok('wrangler.toml 没有明文管理员变量', !/^ADMIN_(?:USER|PASS)\s*=/m.test(toml));
+  const jsmini = fs.readFileSync(path.join(process.cwd(), 'test/jsmini.test.mjs'), 'utf8');
+  ok('jsmini 测试没有本机绝对路径', !/['"`]\/(?:workspace|home|Users)\//.test(jsmini));
+}
 eq('环境变量齐全', missingEnv(env1), []);
 const cfgDeep = flatten(deepMerge(DEFAULT_SETTINGS, { llm: { deepThinking: false } }), env1);
 eq('关掉深度思考 → effort=none', cfgDeep.reasoningEffort, 'none');

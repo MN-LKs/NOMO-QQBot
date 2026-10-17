@@ -27,13 +27,23 @@
 
 ### 部署之后变量好像「自己丢了」,面板又锁上了
 
-**原因**:`wrangler.toml` 里如果写了 `[vars]`,每次部署都会用文件里的值**覆盖**后台设置。
-旧版本仓库里有两个空的 `ADMIN_USER = ""` / `ADMIN_PASS = ""`,
-绑定仓库自动构建时就会把后台设置的值冲掉。
+**原因**:旧版 `wrangler.toml` 里有 `[vars]` 的两个空值
+`ADMIN_USER = ""` / `ADMIN_PASS = ""`。`wrangler deploy` 默认会用配置文件里的变量
+覆盖后台,所以每次部署都可能把后台变量冲掉或删掉。
 
-**解决**:本仓库已经移除了这两个空变量。如果你自己加过,请删掉空值;
-想用文件管理变量的话,填真实值(注意不要把密码提交到公开仓库),
-或者加 `keep_vars = true` 保留后台变量。
+**解决**:本仓库已经做了三件事:
+
+1. 删掉了 `[vars]` 里的两个空值;
+2. 在 `wrangler.toml` 顶部加了 `keep_vars = true`,以后部署会保留后台变量;
+3. 管理员账号改为在后台用 **Secret** 类型添加,Secret 不会被部署删除。
+
+如果变量已经被删了,重新添加一次即可:
+
+1. Settings → Variables and Secrets → Add
+2. `ADMIN_USER`(用户名)、`ADMIN_PASS`(密码),类型都选 Secret
+3. 保存后刷新 `/administrator`;还不行就 Deployments → Retry deployment
+
+这不是你操作错了,是旧配置的副作用。补一次之后,后续部署不会再丢。
 
 ### 打开任何地址都返回 503「服务还没有初始化完成」
 

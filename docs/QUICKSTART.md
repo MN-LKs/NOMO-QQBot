@@ -92,6 +92,9 @@ https://nomo-qqbot.<你的账号子域>.workers.dev
 只有这两个环境变量。AI 接口、QQ 凭据、搜索 Key 全都在面板里填,存进 D1,
 以后改配置不用重新部署。
 
+> 本仓库已在 `wrangler.toml` 里设置 `keep_vars = true`,以后部署不会清掉后台变量。
+> 如果之前变量被旧版空 `[vars]` 删掉了,重新添加一次即可,不需要改代码。
+
 > 千万不要把密码写进 `wrangler.toml` 再提交到公开仓库。
 
 加完变量后**再部署一次**(Deployments → Retry deployment)。
@@ -212,6 +215,18 @@ https://<你的地址>/administrator
 
 ---
 
+## 本地开发(可选)
+
+```bash
+npm install
+printf 'ADMIN_USER=admin\nADMIN_PASS=本地密码\n' > .dev.vars
+npm run dev
+```
+
+`.dev.vars` 已经在 `.gitignore` 里,不会被提交。线上不要用它,线上用 Secret。
+
+---
+
 ## 出问题先看这张表
 
 | 现象 | 先检查什么 |
@@ -224,7 +239,7 @@ https://<你的地址>/administrator
 | 机器人回「还没有配置 AI 接口」 | 面板里的 AI 地址 / Key 没保存成功 |
 | 搜索没结果 | 搜索地址没填到 `/v1`,或服务商返回结构不识别(看测试弹窗) |
 | 部署链接打不开 | 项目过期(默认 10 分钟);或站点域名填错 |
-| 更新后配置丢了 | `wrangler.toml` 里写了 `[vars]` 空值,覆盖了后台变量 |
+| 更新后配置丢了 | 旧版 `[vars]` 空值覆盖了后台;本仓库已加 `keep_vars = true`,重新添加一次即可 |
 
 更多「现象 → 原因 → 解决」在 [FAQ](FAQ.md)。
 
