@@ -634,6 +634,21 @@ await t('添加 S3 存储:密钥打码且不泄露', async () => {
   const st = await api('/settings');
   assert(!JSON.stringify(st.json.settings.storage.stores).includes('secret-key-1234567890'), '设置里也不应出现明文');
 });
+await t('编辑 S3 存储:打码值回传不会覆盖真实密钥', async () => {
+  const list = await api('/storage');
+  const s3 = (list.json.status.stores || []).find((s) => s.name === '测试 S3');
+  assert(s3, '应存在测试存储');
+  const r = await api('/storage/save', { method: 'POST', body: { store: {
+    id: s3.id, kind: 's3', name: s3.name, endpoint: s3.endpoint, bucket: s3.bucket,
+    region: s3.region, accessKey: s3.accessKey, secretKey: '', priority: 60,
+  } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const row = await env.DB.prepare('SELECT v FROM settings WHERE k = ?').bind('storage').first();
+  const saved = JSON.parse(row.v).stores.find((s) => s.id === s3.id);
+  assert(saved.accessKey === 'AKTEST123456', `accessKey 应保留原值,实际:${saved.accessKey}`);
+  assert(saved.secretKey === 'secret-key-1234567890', 'secretKey 应保留原值');
+  assert(saved.priority === 60, 'priority 应更新');
+});
 await t('删除 S3 存储', async () => {
   const list = await api('/storage');
   const s3 = (list.json.status.stores || []).find((s) => s.name === '测试 S3');

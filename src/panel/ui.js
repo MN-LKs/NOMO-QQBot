@@ -262,7 +262,11 @@ function sw(on,attr){return '<div class="sw'+(on?' on':'')+'" '+attr+'></div>'}
 var NAV=[
  ['home','首页','M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z'],
  ['mcp','MCP 设置','M5 3h14v5H5zM5 16h14v5H5zM12 8v8'],
+ ['skills','技能','M12 3l2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.2l5.9-.8z'],
+ ['exts','扩展','M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z'],
+ ['modules','模块','M9 6L4 12l5 6M15 6l5 6-5 6'],
  ['projects','部署项目','M3 5h7l2 2h9v12H3zM3 11h18'],
+ ['storage','存储','M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
  ['settings','设置','M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.6H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.5 1.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'],
  ['logs','日志','M4 4h16v16H4zM8 8h8M8 12h8M8 16h5'],
 ];
@@ -297,6 +301,10 @@ function render(force){
  el('sb').classList.remove('open');
  if(r[0]==='home')return pageHome();
  if(r[0]==='mcp')return pageMcp();
+ if(r[0]==='skills')return pageSkills();
+ if(r[0]==='exts')return pageExts();
+ if(r[0]==='modules')return pageModules();
+ if(r[0]==='storage')return pageStorage();
  if(r[0]==='projects')return r[1]?pageProject(r[1]):pageProjects();
  if(r[0]==='new')return pageNew();
  if(r[0]==='settings')return pageSettings();
@@ -790,6 +798,299 @@ function pageMcp(){
     .then(function(){toast('已删除');render()})},true)}});
  }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
 }
+var skillEdit=null,extEdit=null,modEdit=null,storeEdit=null;
+function pageSkills(){
+ setTitle('技能');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/skills').then(function(d){
+  var editing=skillEdit;
+  v.innerHTML='<div class="card"><h3>技能</h3><div class="sub">写给机器人的专项知识:消息里提到触发词时,内容会注入系统提示词。不填触发词 = 每次都带上</div>'+
+   (d.skills.length?d.skills.map(function(s){
+    return '<div style="border:1px solid #e2e8f0;border-radius:9px;padding:14px;margin-bottom:12px">'+
+     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:200px">'+
+      '<b style="font-size:14px">'+h(s.name)+'</b> '+
+      '<span class="tag '+(s.enabled?'ok':'off')+'">'+(s.enabled?'已启用':'已停用')+'</span> '+
+      (s.triggers&&s.triggers.length?'<span class="tag blue">'+h(s.triggers.join(' / '))+'</span>':'<span class="tag warn">每次注入</span>')+
+      '<br><span class="small dim">'+h(s.description||'没有说明')+'</span></div>'+
+      '<div class="line" style="border:0;padding:0">'+sw(s.enabled,'data-en="'+h(s.id)+'"')+'</div>'+
+      '<button class="btn sm" data-edit="'+h(s.id)+'">编辑</button>'+
+      '<button class="btn sm bad" data-del="'+h(s.id)+'">删除</button></div>'+
+     '<div class="small dim" style="margin-top:9px;white-space:pre-wrap;max-height:76px;overflow:hidden">'+h(String(s.content||'').slice(0,240))+'</div></div>'}).join('')
+    :'<div class="empty">还没有技能,下面建一个</div>')+'</div>'+
+   '<div class="card"><h3>'+(editing?'编辑技能':'新建技能')+'</h3><div class="sub">也可以粘贴 SKILL.md 风格的文本,点「解析」自动填表</div>'+
+   '<div class="fld"><label class="f">快速导入(粘贴后点解析,可留空)</label><textarea class="t mono" id="sk-doc" style="min-height:64px" placeholder="--- 开头写 name / triggers / description,正文跟在第二个 --- 之后"></textarea></div>'+
+   '<div style="margin:-2px 0 13px"><button class="btn sm" id="sk-parse">解析并填入下方</button></div>'+
+   '<div class="row"><div><label class="f">名称</label><input class="t" id="sk-name" value="'+(editing?h(editing.name):'')+'"></div>'+
+   '<div><label class="f">触发词(逗号分隔;留空 = 每次都注入)</label><input class="t" id="sk-tr" value="'+(editing?h((editing.triggers||[]).join(',')):'')+'"></div></div>'+
+   '<div class="fld" style="margin-top:13px"><label class="f">说明(可留空)</label><input class="t" id="sk-desc" value="'+(editing?h(editing.description||''):'')+'"></div>'+
+   '<div class="fld"><label class="f">内容</label><textarea class="t mono" id="sk-content" style="min-height:160px">'+(editing?h(editing.content):'')+'</textarea></div>'+
+   '<button class="btn pri" id="sk-save">'+(editing?'保存修改':'创建技能')+'</button> '+(editing?'<button class="btn" id="sk-cancel">取消编辑</button>':'')+'</div>';
+  var parseDoc=function(t){
+   var nl=String.fromCharCode(10);
+   var src=String(t||'').trim(),meta={},body=src;
+   if(src.indexOf('---')===0){
+    var rest=src.slice(3),end=rest.indexOf(nl+'---');
+    if(end>=0){
+     var head=rest.slice(0,end);rest=rest.slice(end+4);
+     if(rest.charAt(0)===nl)rest=rest.slice(1);
+     body=rest.trim();
+     var lines=head.split(nl);
+     for(var i=0;i<lines.length;i++){
+      var line=lines[i],p=line.indexOf(':'),q=line.indexOf('：');
+      if(p<0||(q>=0&&q<p))p=q;
+      if(p<0)continue;
+      var k=line.slice(0,p).trim().toLowerCase(),val=line.slice(p+1).trim();
+      if(k)meta[k]=val;
+     }
+    }
+   }
+   return {name:meta.name||'',description:meta.description||'',triggers:meta.triggers||'',content:body};
+  };
+  v.querySelector('#sk-parse').onclick=function(){
+   var r=parseDoc(v.querySelector('#sk-doc').value);
+   if(!r.name&&!r.content){toast('没有解析到内容');return}
+   v.querySelector('#sk-name').value=r.name;
+   v.querySelector('#sk-tr').value=r.triggers;
+   v.querySelector('#sk-desc').value=r.description;
+   v.querySelector('#sk-content').value=r.content;
+   toast('已填入下方表单');
+  };
+  var byId=function(id){return d.skills.filter(function(x){return x.id===id})[0]||{}};
+  v.querySelector('#sk-save').onclick=function(){var b=this;
+   var name=v.querySelector('#sk-name').value.trim(),content=v.querySelector('#sk-content').value;
+   if(!name){toast('请填名称');return}
+   if(!content.trim()){toast('内容不能为空');return}
+   b.disabled=true;
+   api('/skills/save',{method:'POST',body:{skill:{id:editing?editing.id:'',name:name,description:v.querySelector('#sk-desc').value.trim(),triggers:v.querySelector('#sk-tr').value.trim(),content:content,enabled:editing?editing.enabled:true}}})
+    .then(function(){toast('已保存');skillEdit=null;render()})
+    .catch(function(e){toast(e.message)}).then(function(){b.disabled=false})};
+  if(editing)v.querySelector('#sk-cancel').onclick=function(){skillEdit=null;render()};
+  v.querySelectorAll('[data-en]').forEach(function(n){n.onclick=function(){
+   var s=byId(n.dataset.en);
+   api('/skills/save',{method:'POST',body:{skill:{id:s.id,name:s.name,description:s.description,triggers:s.triggers,content:s.content,enabled:!n.classList.contains('on')}}})
+    .then(function(){render()}).catch(function(e){toast(e.message)})}});
+  v.querySelectorAll('[data-edit]').forEach(function(b){b.onclick=function(){skillEdit=byId(b.dataset.edit);render()}});
+  v.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
+   confirmBox('删除技能','确认删除「'+h(byId(b.dataset.del).name||'')+'」?',function(){
+    api('/skills/remove',{method:'POST',body:{id:b.dataset.del}}).then(function(){
+     toast('已删除');if(skillEdit&&skillEdit.id===b.dataset.del)skillEdit=null;render()})},true)}});
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function pageExts(){
+ setTitle('扩展');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/exts').then(function(d){
+  var editing=extEdit,builtin=d.builtin||[],external=d.external||[];
+  v.innerHTML='<div class="card"><h3>内置工具组</h3><div class="sub">随机器人一起运行的工具,可以按需关掉。关掉后模型就看不到这些工具</div>'+
+   builtin.map(function(b){
+    return '<div class="line"><div class="g"><b>'+h(b.name)+'</b><span>'+h(b.description||'')+'</span>'+
+     '<span class="mono" style="font-size:11px">'+h((b.tools||[]).join(', '))+'</span></div>'+sw(b.enabled,'data-bt="'+h(b.id)+'"')+'</div>'}).join('')+'</div>'+
+   '<div class="card"><h3>外部扩展</h3><div class="sub">把任意 HTTP 接口配置成机器人的工具:填一份工具定义,模型就能调用它</div>'+
+   (external.length?external.map(function(e){
+    var n=Array.isArray(e.config&&e.config.tools)?e.config.tools.length:0;
+    return '<div style="border:1px solid #e2e8f0;border-radius:9px;padding:14px;margin-bottom:12px">'+
+     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:200px">'+
+      '<b style="font-size:14px">'+h(e.name)+'</b> <span class="tag mono">'+h(e.id)+'</span> <span class="tag '+(e.enabled?'ok':'off')+'">'+(e.enabled?'已启用':'已停用')+'</span>'+
+      '<br><span class="small dim">'+h(e.description||'没有说明')+' · '+n+' 个工具</span></div>'+
+      '<div class="line" style="border:0;padding:0">'+sw(e.enabled,'data-en="'+h(e.id)+'"')+'</div>'+
+      '<button class="btn sm" data-edit="'+h(e.id)+'">编辑</button>'+
+      '<button class="btn sm bad" data-del="'+h(e.id)+'">删除</button></div></div>'}).join('')
+    :'<div class="empty">还没有外部扩展</div>')+'</div>'+
+   '<div class="card"><h3>'+(editing?'编辑外部扩展':'添加外部扩展')+'</h3>'+
+   '<div class="sub">config 里至少要有 tools 数组。每个工具的字段:name、description、endpoint(URL 里可用双花括号占位参数,如 {{city}})、method、headers、body、parameters、responsePath、timeoutMs</div>'+
+   '<div class="row"><div><label class="f">扩展 ID(字母数字,会进工具名)</label><input class="t mono" id="ex-id" value="'+(editing?h(editing.id):'')+'"'+(editing?' disabled':'')+' placeholder="weather"></div>'+
+   '<div><label class="f">名称</label><input class="t" id="ex-name" value="'+(editing?h(editing.name):'')+'"></div></div>'+
+   '<div class="fld" style="margin-top:13px"><label class="f">说明(可留空)</label><input class="t" id="ex-desc" value="'+(editing?h(editing.description||''):'')+'"></div>'+
+   '<div class="fld"><label class="f">工具定义(config JSON)</label><textarea class="t mono" id="ex-config" style="min-height:170px">'+(editing?h(JSON.stringify(editing.config,null,1)):'')+'</textarea>'+
+   '<div class="hint" style="margin-top:8px">示例:{"tools":[{"name":"weather","description":"查天气","endpoint":"https://api.example.com/weather?city={{city}}","method":"GET","responsePath":"data.text"}]}</div></div>'+
+   '<button class="btn pri" id="ex-save">'+(editing?'保存修改':'添加扩展')+'</button> '+(editing?'<button class="btn" id="ex-cancel">取消编辑</button>':'')+'</div>';
+  var byId=function(id){return external.filter(function(x){return x.id===id})[0]||{}};
+  v.querySelectorAll('[data-bt]').forEach(function(n){n.onclick=function(){
+   api('/exts/toggle',{method:'POST',body:{id:n.dataset.bt,enabled:!n.classList.contains('on')}})
+    .then(function(){render()}).catch(function(e){toast(e.message)})}});
+  v.querySelectorAll('[data-en]').forEach(function(n){n.onclick=function(){
+   var e=byId(n.dataset.en);
+   api('/exts/save',{method:'POST',body:{ext:{id:e.id,name:e.name,description:e.description,config:e.config,enabled:!n.classList.contains('on')}}})
+    .then(function(){render()}).catch(function(err){toast(err.message)})}});
+  v.querySelectorAll('[data-edit]').forEach(function(b){b.onclick=function(){extEdit=byId(b.dataset.edit);render()}});
+  v.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
+   confirmBox('删除扩展','确认删除「'+h(byId(b.dataset.del).name||'')+'」这个外部扩展?',function(){
+    api('/exts/remove',{method:'POST',body:{id:b.dataset.del}}).then(function(){
+     toast('已删除');if(extEdit&&extEdit.id===b.dataset.del)extEdit=null;render()})},true)}});
+  v.querySelector('#ex-save').onclick=function(){var b=this;
+   var id=v.querySelector('#ex-id').value.trim(),name=v.querySelector('#ex-name').value.trim();
+   if(!/^[a-zA-Z0-9_-]{2,32}$/.test(id)){toast('ID 用 2-32 位字母/数字/下划线/短横线');return}
+   var cfg;
+   try{cfg=v.querySelector('#ex-config').value.trim()?JSON.parse(v.querySelector('#ex-config').value):{}}catch(e){toast('config 不是合法 JSON');return}
+   b.disabled=true;
+   api('/exts/save',{method:'POST',body:{ext:{id:id,name:name||id,description:v.querySelector('#ex-desc').value.trim(),config:cfg,enabled:editing?editing.enabled:true}}})
+    .then(function(){toast('已保存');extEdit=null;render()})
+    .catch(function(e){toast(e.message)}).then(function(){b.disabled=false})};
+  if(editing)v.querySelector('#ex-cancel').onclick=function(){extEdit=null;render()};
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function pageModules(){
+ setTitle('模块');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/modules').then(function(d){
+  var editing=modEdit,mods=d.modules||[];
+  v.innerHTML='<div class="card"><h3>预制模块</h3><div class="sub">管理员写的小段后端 JS,由内置沙盒解释器执行(不用 eval)。勾「Agent 工具」= 模型可直接调用;勾「站点后端」= 以后部署的页面可以调它</div>'+
+   (mods.length?mods.map(function(m){
+    var cp=m.callPoints||[];
+    return '<div style="border:1px solid #e2e8f0;border-radius:9px;padding:14px;margin-bottom:12px">'+
+     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:200px">'+
+      '<b style="font-size:14px">'+h(m.name)+'</b> <span class="tag mono">'+h(m.id)+'</span> '+
+      (cp.indexOf('agent')>=0?'<span class="tag blue">Agent 工具</span> ':'')+
+      (cp.indexOf('site')>=0?'<span class="tag blue">站点后端</span> ':'')+
+      '<span class="tag '+(m.enabled?'ok':'off')+'">'+(m.enabled?'已启用':'已停用')+'</span>'+
+      '<br><span class="small dim">'+h(m.description||'没有说明')+' · 超时 '+(m.timeoutMs||5000)+'ms'+(m.path?' · '+h(String(m.method||'ANY').toUpperCase())+' '+h(m.path):'')+'</span></div>'+
+      '<div class="line" style="border:0;padding:0">'+sw(m.enabled,'data-en="'+h(m.id)+'"')+'</div>'+
+      '<button class="btn sm" data-test="'+h(m.id)+'">测试</button>'+
+      '<button class="btn sm" data-edit="'+h(m.id)+'">编辑</button>'+
+      '<button class="btn sm bad" data-del="'+h(m.id)+'">删除</button></div></div>'}).join('')
+    :'<div class="empty">还没有模块</div>')+'</div>'+
+   '<div class="card"><h3>'+(editing?'编辑模块':'新建模块')+'</h3>'+
+   '<div class="sub">代码顶层直接写语句,用 return 返回结果;可用 ctx.args、ctx.fetch(url)、ctx.log(值)。参数定义是 JSON Schema</div>'+
+   '<div class="row"><div><label class="f">模块 ID(字母数字,进工具名)</label><input class="t mono" id="mo-id" value="'+(editing?h(editing.id):'')+'"'+(editing?' disabled':'')+' placeholder="echo_mod"></div>'+
+   '<div><label class="f">名称</label><input class="t" id="mo-name" value="'+(editing?h(editing.name):'')+'"></div></div>'+
+   '<div class="fld" style="margin-top:13px"><label class="f">说明(模型靠它决定什么时候调用)</label><input class="t" id="mo-desc" value="'+(editing?h(editing.description||''):'')+'"></div>'+
+   '<div class="fld"><label class="f">参数定义(params JSON Schema,可留空)</label><textarea class="t mono" id="mo-params" style="min-height:70px">'+(editing&&editing.params&&Object.keys(editing.params).length?h(JSON.stringify(editing.params,null,1)):'')+'</textarea></div>'+
+   '<div class="fld"><label class="f">代码</label><textarea class="t mono" id="mo-code" style="min-height:190px">'+(editing?h(editing.code):'')+'</textarea></div>'+
+   '<div class="row"><div><label class="f">调用点</label><div style="padding-top:9px">'+
+    '<label style="margin-right:16px;font-size:13px"><input type="checkbox" id="mo-agent"'+(editing&&(editing.callPoints||[]).indexOf('agent')>=0?' checked':'')+'> Agent 工具</label>'+
+    '<label style="font-size:13px"><input type="checkbox" id="mo-site"'+(editing&&(editing.callPoints||[]).indexOf('site')>=0?' checked':'')+'> 站点后端</label></div></div>'+
+   '<div><label class="f">超时(毫秒,500-30000)</label><input class="t" type="number" id="mo-timeout" value="'+(editing?(editing.timeoutMs||5000):5000)+'"></div></div>'+
+   '<div class="row" style="margin-top:13px"><div><label class="f">HTTP 方法(站点后端用)</label><select class="t" id="mo-method">'+
+    ['ANY','GET','POST','PUT','DELETE'].map(function(x){return '<option value="'+x+'"'+((editing?(editing.method||'ANY'):'ANY').toUpperCase()===x?' selected':'')+'>'+x+'</option>'}).join('')+'</select></div>'+
+   '<div><label class="f">路径(站点后端用,如 /api/echo)</label><input class="t mono" id="mo-path" value="'+(editing?h(editing.path||''):'')+'"></div></div>'+
+   '<button class="btn pri" id="mo-save" style="margin-top:14px">'+(editing?'保存修改':'创建模块')+'</button> '+(editing?'<button class="btn" id="mo-cancel">取消编辑</button>':'')+'</div>';
+  var byId=function(id){return mods.filter(function(x){return x.id===id})[0]||{}};
+  v.querySelectorAll('[data-en]').forEach(function(n){n.onclick=function(){
+   var m=byId(n.dataset.en);
+   api('/modules/save',{method:'POST',body:{module:{id:m.id,name:m.name,description:m.description,code:m.code,params:m.params,callPoints:m.callPoints,method:m.method,path:m.path,enabled:!n.classList.contains('on'),timeoutMs:m.timeoutMs}}})
+    .then(function(){render()}).catch(function(e){toast(e.message)})}});
+  v.querySelectorAll('[data-edit]').forEach(function(b){b.onclick=function(){modEdit=byId(b.dataset.edit);render()}});
+  v.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
+   confirmBox('删除模块','确认删除「'+h(byId(b.dataset.del).name||'')+'」?',function(){
+    api('/modules/remove',{method:'POST',body:{id:b.dataset.del}}).then(function(){
+     toast('已删除');if(modEdit&&modEdit.id===b.dataset.del)modEdit=null;render()})},true)}});
+  v.querySelectorAll('[data-test]').forEach(function(b){b.onclick=function(){
+   var old=b.textContent;b.disabled=true;b.textContent='运行中…';
+   api('/modules/test',{method:'POST',body:{id:b.dataset.test,args:{}}}).then(function(r){
+    var nl=String.fromCharCode(10);
+    var txt=r.ok?('返回值:'+nl+String(JSON.stringify(r.value===undefined?null:r.value,null,2))):('运行失败:'+(r.error||''));
+    if(r.logs&&r.logs.length)txt+=nl+nl+'日志:'+nl+r.logs.join(nl);
+    var m=modal('模块测试 · '+b.dataset.test,'<pre class="code">'+h(txt)+'</pre>','<button class="btn" data-x>关闭</button>');
+    m.querySelector('[data-x]').onclick=function(){m.remove()};
+   }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent=old})}});
+  v.querySelector('#mo-save').onclick=function(){var b=this;
+   var id=v.querySelector('#mo-id').value.trim(),name=v.querySelector('#mo-name').value.trim(),code=v.querySelector('#mo-code').value;
+   if(!/^[a-zA-Z0-9_-]{2,32}$/.test(id)){toast('ID 用 2-32 位字母/数字/下划线/短横线');return}
+   if(!code.trim()){toast('代码不能为空');return}
+   var params;
+   try{params=v.querySelector('#mo-params').value.trim()?JSON.parse(v.querySelector('#mo-params').value):{}}catch(e){toast('参数定义不是合法 JSON');return}
+   var cps=[];
+   if(v.querySelector('#mo-agent').checked)cps.push('agent');
+   if(v.querySelector('#mo-site').checked)cps.push('site');
+   b.disabled=true;
+   api('/modules/save',{method:'POST',body:{module:{id:id,name:name||id,description:v.querySelector('#mo-desc').value.trim(),code:code,params:params,callPoints:cps,method:v.querySelector('#mo-method').value,path:v.querySelector('#mo-path').value.trim(),enabled:editing?editing.enabled:true,timeoutMs:Math.max(500,Math.min(30000,Number(v.querySelector('#mo-timeout').value)||5000))}}})
+    .then(function(){toast('已保存');modEdit=null;render()})
+    .catch(function(e){toast(e.message)}).then(function(){b.disabled=false})};
+  if(editing)v.querySelector('#mo-cancel').onclick=function(){modEdit=null;render()};
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function pageStorage(){
+ setTitle('存储');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ api('/storage').then(function(d){
+  var st=d.status||{},stores=st.stores||[],editing=storeEdit,bind=st.bindings||{};
+  var tagOf=function(ok){return '<span class="tag '+(ok?'ok':'bad')+'">'+(ok?'已绑定':'未绑定')+'</span>'};
+  v.innerHTML=
+   ((st.warnings||[]).length?'<div class="card" style="border-color:#fecaca"><h3 style="color:#b91c1c">注意</h3>'+
+    (st.warnings||[]).map(function(w){return '<div class="small" style="line-height:1.9;color:'+(w.level==='severe'?'#b91c1c':'#b45309')+'">· '+h(w.text)+'</div>'}).join('')+'</div>':'')+
+   '<div class="card"><h3>绑定状态</h3><div class="sub">KV 和 R2 在 Cloudflare 后台绑定后自动出现在下面;S3 兼容存储(Filebase、Upstash、MinIO 等)在这里手动添加</div>'+
+   '<div class="line"><div class="g"><b>D1 数据库(DB)</b><span>配置、日志、统计</span></div>'+tagOf(bind.db)+'</div>'+
+   '<div class="line"><div class="g"><b>KV 命名空间(STORE)</b><span>部署文件的保底存储 / 缓存</span></div>'+tagOf(bind.kv)+'</div>'+
+   '<div class="line"><div class="g"><b>R2 存储桶(R2)</b><span>绑了之后自动成为主存储</span></div>'+tagOf(bind.r2)+'</div>'+
+   '<div class="line"><div class="g"><b>KV 镜像缓存</b><span>写入主存储时顺带往 KV 存一份,读取更稳</span></div>'+sw(st.cacheKV!==false,'data-cache')+'</div></div>'+
+   '<div class="card"><h3>存储列表</h3><div class="sub">写入时按优先级从高到低,挑第一个「启用 + 可用 + 有余量」的存储</div>'+
+   (stores.length?stores.map(function(s){
+    var pct=s.maxBytes?Math.min(100,Math.round(s.usedBytes/s.maxBytes*100)):0;
+    return '<div style="border:1px solid #e2e8f0;border-radius:9px;padding:14px;margin-bottom:12px">'+
+     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"><div style="flex:1;min-width:200px">'+
+      '<b style="font-size:14px">'+h(s.name)+'</b> '+
+      '<span class="tag mono">'+h(s.kind)+'</span> '+
+      (s.primary?'<span class="tag blue">主存储</span> ':'')+
+      '<span class="tag '+(s.available?'ok':'bad')+'">'+(s.available?'可用':'不可用')+'</span> '+
+      '<span class="tag '+(s.enabled?'ok':'off')+'">'+(s.enabled?'已启用':'已停用')+'</span>'+
+      '<br><span class="small dim">优先级 '+s.priority+' · 已用 '+bytes(s.usedBytes)+' / '+bytes(s.maxBytes)+' · '+s.files+' 个文件'+
+      (s.endpoint?' · '+h(s.endpoint):'')+(s.bucket?' / '+h(s.bucket):'')+'</span>'+
+      (s.reason?'<br><span class="small" style="color:#b45309">'+h(s.reason)+'</span>':'')+'</div>'+
+      '<div class="line" style="border:0;padding:0">'+sw(s.enabled,'data-en="'+h(s.id)+'"')+'</div>'+
+      '<button class="btn sm" data-test="'+h(s.id)+'">测试</button>'+
+      '<button class="btn sm" data-scan="'+h(s.id)+'">扫描</button>'+
+      '<button class="btn sm" data-edit="'+h(s.id)+'">编辑</button>'+
+      (s.kind==='s3'?'<button class="btn sm bad" data-del="'+h(s.id)+'">删除</button>':'')+'</div>'+
+     '<div class="bar" style="margin-top:10px"><i class="'+(pct>=90?'bad':pct>=70?'warn':'')+'" style="width:'+pct+'%"></i></div></div>'}).join('')
+   :'<div class="empty">没有任何存储</div>')+'</div>'+
+   '<div class="card"><h3>'+(editing?('编辑存储 · '+h(editing.name)):'添加 S3 兼容存储')+'</h3>'+
+   '<div class="sub">'+(editing?'内置存储(KV / R2)只能改启用、优先级和容量上限;S3 可以改全部字段':'适合放大量文件的外部存储:Filebase、Upstash、MinIO、Cloudflare R2 的 S3 接口等')+'</div>'+
+   '<div class="row"><div><label class="f">名称</label><input class="t" id="sr-name" value="'+(editing?h(editing.name):'')+'"></div>'+
+   '<div><label class="f">优先级(数字越大越优先)</label><input class="t" type="number" id="sr-prio" value="'+(editing?editing.priority:50)+'"></div></div>'+
+   (editing&&editing.kind!=='s3'?'':(
+    '<div class="fld" style="margin-top:13px"><label class="f">Endpoint</label><input class="t mono" id="sr-ep" value="'+(editing?h(editing.endpoint||''):'')+'" placeholder="https://s3.us-east-1.amazonaws.com"></div>'+
+    '<div class="row"><div><label class="f">Bucket</label><input class="t mono" id="sr-bk" value="'+(editing?h(editing.bucket||''):'')+'"></div>'+
+    '<div><label class="f">Region(可填 auto)</label><input class="t mono" id="sr-rg" value="'+(editing?h(editing.region||''):'')+'" placeholder="auto"></div></div>'+
+    '<div class="row" style="margin-top:13px"><div><label class="f">Access Key</label><input class="t mono" id="sr-ak" value="'+(editing?h(editing.accessKey||''):'')+'"></div>'+
+    '<div><label class="f">Secret Key'+(editing?'(留空 = 不改)':'')+'</label><input class="t mono" type="password" id="sr-sk" value=""></div></div>'+
+    '<div class="fld" style="margin-top:13px"><label style="font-size:13px"><input type="checkbox" id="sr-ps"'+(editing?(editing.pathStyle!==false?' checked':''):' checked')+'> Path-Style 寻址(大多数 S3 兼容服务需要;AWS 原生可以关)</label></div>'))+
+   '<div class="fld"><label class="f">容量上限(GB)</label><input class="t" type="number" id="sr-max" value="'+(editing?Math.max(1,Math.round((editing.maxBytes||0)/1073741824)):5)+'"></div>'+
+   '<button class="btn pri" id="sr-save">'+(editing?'保存修改':'添加存储')+'</button> '+(editing?'<button class="btn" id="sr-cancel">取消编辑</button>':'')+'</div>';
+  var byId=function(id){return stores.filter(function(x){return x.id===id})[0]||{}};
+  v.querySelectorAll('[data-en]').forEach(function(n){n.onclick=function(){
+   var s=byId(n.dataset.en);
+   var store={id:s.id,kind:s.kind,name:s.name,priority:s.priority,maxBytes:s.maxBytes,enabled:!n.classList.contains('on')};
+   if(s.kind==='s3'){store.endpoint=s.endpoint;store.bucket=s.bucket;store.region=s.region;store.accessKey=s.accessKey;store.pathStyle=s.pathStyle}
+   api('/storage/save',{method:'POST',body:{store:store}}).then(function(){render()}).catch(function(e){toast(e.message)})}});
+  v.querySelectorAll('[data-test]').forEach(function(b){b.onclick=function(){
+   var old=b.textContent;b.disabled=true;b.textContent='测试中…';
+   api('/storage/test',{method:'POST',body:{id:b.dataset.test}}).then(function(r){
+    toast(r.ok?(r.note||'可用'):('不可用:'+(r.error||'')))})
+    .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent=old})}});
+  v.querySelectorAll('[data-scan]').forEach(function(b){b.onclick=function(){
+   var old=b.textContent;b.disabled=true;b.textContent='扫描中…';
+   api('/storage/scan',{method:'POST',body:{id:b.dataset.scan}}).then(function(r){
+    toast('扫描完成:'+bytes(r.bytes)+' / '+r.files+' 个文件');render()})
+    .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent=old})}});
+  v.querySelectorAll('[data-edit]').forEach(function(b){b.onclick=function(){storeEdit=byId(b.dataset.edit);render()}});
+  v.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
+   var s=byId(b.dataset.del);
+   confirmBox('删除存储','确认移除「'+h(s.name||b.dataset.del)+'」?存储里已有的文件不会自动删除。',function(){
+    api('/storage/remove',{method:'POST',body:{id:b.dataset.del}}).then(function(){
+     toast('已移除');if(storeEdit&&storeEdit.id===b.dataset.del)storeEdit=null;render()})},true)}});
+  v.querySelector('[data-cache]').onclick=function(){var on=!this.classList.contains('on');
+   api('/storage/cache',{method:'POST',body:{enabled:on}}).then(function(){toast('已'+(on?'开启':'关闭'));render()})};
+  v.querySelector('#sr-save').onclick=function(){var b=this;
+   var store={id:editing?editing.id:'',kind:editing?editing.kind:'s3',name:v.querySelector('#sr-name').value.trim(),
+    priority:Number(v.querySelector('#sr-prio').value)||(editing?editing.priority:50),
+    maxBytes:Math.max(1,Number(v.querySelector('#sr-max').value)||5)*1073741824,
+    enabled:editing?editing.enabled:true};
+   if(!editing||editing.kind==='s3'){
+    store.endpoint=v.querySelector('#sr-ep').value.trim();
+    store.bucket=v.querySelector('#sr-bk').value.trim();
+    store.region=v.querySelector('#sr-rg').value.trim()||'auto';
+    store.accessKey=v.querySelector('#sr-ak').value.trim();
+    store.secretKey=v.querySelector('#sr-sk').value.trim();
+    store.pathStyle=v.querySelector('#sr-ps').checked;
+   }
+   b.disabled=true;
+   api('/storage/save',{method:'POST',body:{store:store}})
+    .then(function(){toast('已保存');storeEdit=null;render()})
+    .catch(function(e){toast(e.message)}).then(function(){b.disabled=false})};
+  if(editing)v.querySelector('#sr-cancel').onclick=function(){storeEdit=null;render()};
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+
 (function boot(){
  var r=(location.hash||'').replace(/^#\\/?/,'');
  S.route=r||'home';

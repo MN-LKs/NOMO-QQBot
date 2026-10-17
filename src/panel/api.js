@@ -484,7 +484,8 @@ async function storageApi(env, seg, method, body) {
       next.endpoint = String(src.endpoint ?? cur.endpoint ?? '').trim();
       next.bucket = String(src.bucket ?? cur.bucket ?? '').trim();
       next.region = String(src.region ?? cur.region ?? 'auto').trim() || 'auto';
-      next.accessKey = String(src.accessKey ?? cur.accessKey ?? '').trim();
+      const ak = String(src.accessKey ?? '').trim();
+      next.accessKey = ak && !ak.includes('****') ? ak : String(cur.accessKey || '');
       const sk = String(src.secretKey ?? '').trim();
       next.secretKey = sk && !sk.includes('****') ? sk : String(cur.secretKey || '');
       next.pathStyle = src.pathStyle !== false;

@@ -90,6 +90,7 @@ export function maskSecrets(settings) {
   if (out.qq?.appSecret) out.qq.appSecret = mask(out.qq.appSecret);
   if (Array.isArray(out.storage?.stores)) {
     for (const s of out.storage.stores) {
+      if (s && s.accessKey) s.accessKey = mask(s.accessKey);
       if (s && s.secretKey) s.secretKey = mask(s.secretKey);
     }
   }
