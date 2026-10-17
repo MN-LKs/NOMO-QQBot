@@ -126,6 +126,18 @@ export function missingEnv(env = {}) {
   return missing;
 }
 
+/**
+ * D1 / KV 是面板和部署功能的基础绑定。
+ * 缺任何一个都直接给一句人话,不要让页面去 env.DB.prepare 然后抛
+ * "Cannot read properties of undefined (reading 'prepare')"。
+ */
+export function missingStorage(env = {}) {
+  const missing = [];
+  if (!env.DB) missing.push('D1 数据库(DB)');
+  if (!env.STORE) missing.push('KV 命名空间(STORE)');
+  return missing;
+}
+
 export function deepMerge(base, patch) {
   if (patch === null || patch === undefined) return base;
   if (Array.isArray(base) || Array.isArray(patch)) return patch;

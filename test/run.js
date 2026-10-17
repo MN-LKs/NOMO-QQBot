@@ -1,10 +1,10 @@
-import { deepMerge, flatten, missingEnv, DEFAULT_SETTINGS, FIXED, normalizeBaseUrl, normalizeApiBase } from '../src/config.js';
+import { deepMerge, flatten, missingEnv, missingStorage, DEFAULT_SETTINGS, FIXED, normalizeBaseUrl, normalizeApiBase } from '../src/config.js';
 import { checkCredentials, issue, verify, readCookie, cookieHeader, COOKIE } from '../src/panel/auth.js';
 import { mimeFor, isTextCt, isImageCt, gzipBytes, gunzipBytes, keyFor } from '../src/store/kvfile.js';
 import { quotaOf } from '../src/store/projects.js';
 import { splitSitePath } from '../src/serve.js';
 import { isSiteId, genSiteId, isReservedPath } from '../src/util/id.js';
-import { chunkText, toPlainText, truncate, clipMiddle } from '../src/util/text.js';
+import { chunkText, stripMention, toPlainText, truncate, clipMiddle } from '../src/util/text.js';
 import { calc, formatNumber } from '../src/util/calc.js';
 import { handleFrame, wsStatus, wsClose } from '../src/qq/gateway.js';
 import { panelPage, loginPage, lockedPage } from '../src/panel/ui.js';
@@ -64,6 +64,8 @@ ok('sandbox 标志透传', flatten(deepMerge(DEFAULT_SETTINGS, { qq: { sandbox: 
 ok('默认不是沙箱', cfg1.sandbox === false);
 eq('缺环境变量', missingEnv({}), ['ADMIN_USER', 'ADMIN_PASS']);
 eq('空白管理员变量也算缺失', missingEnv({ ADMIN_USER: '   ', ADMIN_PASS: '' }), ['ADMIN_USER', 'ADMIN_PASS']);
+eq('缺 D1/KV 的提示', missingStorage({}), ['D1 数据库(DB)', 'KV 命名空间(STORE)']);
+eq('只缺 KV 的提示', missingStorage({ DB: {} }), ['KV 命名空间(STORE)']);
 {
   const toml = fs.readFileSync(path.join(ROOT, 'wrangler.toml'), 'utf8');
   ok('wrangler.toml 开启 keep_vars', /^keep_vars\s*=\s*true/m.test(toml));
@@ -231,6 +233,9 @@ ok('clipMiddle 保留头尾并折叠中间', clipped.startsWith('a'.repeat(100))
 ok('chunkText 分片', chunkText('a'.repeat(2000), 800, 5).length === 3);
 ok('chunkText 上限', chunkText('a'.repeat(9000), 800, 5).length === 5);
 ok('toPlainText 去 Markdown', !toPlainText('**粗**').includes('**'));
+eq('stripMention 去掉 @机器人', stripMention('<@1DE88C976BC91D0206BAEB85C5213F0C> /AI 你好'), '/AI 你好');
+eq('stripMention 去掉 <@!...>', stripMention('<@!123> /帮助'), '/帮助');
+eq('stripMention 不动正文里的 @', stripMention('/AI 说 <@123> 是谁'), '/AI 说 <@123> 是谁');
 
 // ---------- 计算与编码 ----------
 eq('calc 四则', formatNumber(calc('(17*23+5)/4')), '99');

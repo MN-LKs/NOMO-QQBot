@@ -5,6 +5,18 @@ export function truncate(s, n, tail = '…') {
 }
 
 /**
+ * 去掉 QQ 消息开头携带的 @机器人 标记。
+ * QQ 群消息的 content 可能是 "<@1DE88...> /AI 你好" 或 "<@!123> /帮助";
+ * 这些标记不剥掉,parseCommand / parseAiPrefix 会把整条消息当成普通文本,
+ * 表现为"机器人收到了但完全没反应"。
+ */
+export function stripMention(s) {
+  return String(s ?? '')
+    .replace(/^(?:\s*<@!?[^>]*>\s*)+/, '')
+    .trim();
+}
+
+/**
  * 超长文本掐头去尾:保留开头 head 字 + 结尾 tail 字,中间折叠成一行提示。
  * 用于工具结果进上下文之前,让多轮工具调用的上下文更紧凑(用更小的空间装更多内容)。
  */

@@ -35,6 +35,10 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 | 设置 | AI 接口(含一键测试、单次请求限时开关)、联网搜索、人设、QQ 凭据、连接方式与结果投递策略、群聊权限、管理员、站点域名、部署参数与部署架构、日志参数 |
 | 日志 | 全部运行日志,按级别筛选、下载、复制、清空,调试模式开关 |
 
+侧边栏里 MCP 设置 / 技能 / 扩展 / 模块 归在「扩展管理」分组下。
+
+公开首页:访问 `/` 是 NOMO 的介绍页(动态渐变、功能卡片、GitHub 入口),不需要登录,也不依赖 D1/KV。
+
 **AI Agent 能力**
 
 - 聊天、答疑、翻译、写文案、算数(算术走工具,不心算)
@@ -123,10 +127,10 @@ QQ 官方机器人 + AI Agent + 在线部署,跑在 Cloudflare Workers 上。
 ```bash
 npm install
 npm run audit              # 静态自检(语法 / import / 脚本 / 文档链接)
-npm test                   # 单元测试(纯逻辑,200 项)
+npm test                   # 单元测试(纯逻辑,205 项)
 npm run test:jsmini        # 沙盒 JS 解释器测试(59 项)
-npm run test:integration   # 集成测试(假上游 + 真 Worker 代码,84 项)
-npm run test:all           # 静态自检 + 敏感信息扫描 + 上面全部(合计 343 项)
+npm run test:integration   # 集成测试(假上游 + 真 Worker 代码,86 项)
+npm run test:all           # 静态自检 + 敏感信息扫描 + 上面全部(合计 350 项)
 ```
 
 集成测试会自己起假服务器(QQ 开放平台、大模型接口、MCP 服务器),

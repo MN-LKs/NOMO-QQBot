@@ -128,6 +128,7 @@ aside{width:206px;flex:0 0 206px;background:#1e293b;color:#cbd5e1;display:flex;f
 .brand b{color:#fff;font-size:16px;letter-spacing:.5px}
 .brand i{font-style:normal;font-size:11px;color:#64748b}
 nav{flex:1;padding:10px 0;overflow:auto}
+.nav-group{padding:15px 18px 6px;font-size:10.5px;letter-spacing:.1em;color:#64748b;font-weight:700}
 .nav{display:flex;align-items:center;gap:10px;padding:11px 18px;cursor:pointer;font-size:13.5px;color:#cbd5e1;
 border-left:3px solid transparent;transition:.12s;user-select:none}
 .nav:hover{background:#273449;color:#fff}
@@ -300,19 +301,22 @@ function confirmBox(title,text,onOk,danger){
 function sw(on,attr){return '<div class="sw'+(on?' on':'')+'" '+attr+'></div>'}
 var NAV=[
  ['home','首页','M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z'],
- ['mcp','MCP 设置','M5 3h14v5H5zM5 16h14v5H5zM12 8v8'],
- ['skills','技能','M12 3l2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.2l5.9-.8z'],
- ['exts','扩展','M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z'],
- ['modules','模块','M9 6L4 12l5 6M15 6l5 6-5 6'],
+ ['mcp','MCP 设置','M5 3h14v5H5zM5 16h14v5H5zM12 8v8','扩展管理'],
+ ['skills','技能','M12 3l2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.2l5.9-.8z','扩展管理'],
+ ['exts','扩展','M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z','扩展管理'],
+ ['modules','模块','M9 6L4 12l5 6M15 6l5 6-5 6','扩展管理'],
  ['projects','部署项目','M3 5h7l2 2h9v12H3zM3 11h18'],
  ['storage','存储','M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
- ['settings','设置','M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.6H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 2.5 1.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0 1.1 2.7H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'],
+ ['settings','设置','M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.6H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3V3a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 16.5 4.5l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.6 1.6 0 0 0 21 10.1V10a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'],
  ['logs','日志','M4 4h16v16H4zM8 8h8M8 12h8M8 16h5'],
 ];
 function renderNav(){
  var r=S.route.split('/')[0];
+ var lastGroup='';
  el('nav').innerHTML=NAV.map(function(n){
-  return '<div class="nav'+(r===n[0]?' on':'')+'" data-go="'+n[0]+'">'+
+  var head='';
+  if(n[3]&&n[3]!==lastGroup){head='<div class="nav-group">'+h(n[3])+'</div>';lastGroup=n[3];}
+  return head+'<div class="nav'+(r===n[0]?' on':'')+'" data-go="'+n[0]+'">'+
    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="'+n[2]+'"/></svg>'+
    '<span>'+n[1]+'</span>'+(S.badges&&S.badges[n[0]]?'<i class="dot">'+S.badges[n[0]]+'</i>':'')+'</div>'}).join('');
  var col='#'+['2563eb','16a34a','d97706','dc2626','7c3aed','0891b2'][(ME.user.charCodeAt(0)||78)%6];
@@ -338,6 +342,14 @@ function render(force){
  var r=S.route.split('/');
  renderNav();
  el('sb').classList.remove('open');
+ // 换一个全新的 #view 节点:旧页面的异步回调只会写进已经脱离文档的旧节点,
+ // 不会再覆盖新页面。这样快速点侧边栏时不会出现「导航是 A、内容是 B」的串台。
+ var oldView=el('view');
+ var freshView=document.createElement('div');
+ freshView.className='wrap';
+ freshView.id='view';
+ freshView.innerHTML='<div class="empty">加载中…</div>';
+ if(oldView&&oldView.parentNode)oldView.parentNode.replaceChild(freshView,oldView);
  if(r[0]==='home')return pageHome();
  if(r[0]==='mcp')return pageMcp();
  if(r[0]==='skills')return pageSkills();

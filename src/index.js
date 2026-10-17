@@ -1,4 +1,4 @@
-import { loadEnv, missingEnv, FIXED, CSP_PANEL } from './config.js';
+import { loadEnv, missingEnv, missingStorage, FIXED, CSP_PANEL } from './config.js';
 import { loadCfg, getRaw } from './store/settings.js';
 import { handleWebhook } from './qq/webhook.js';
 import { serveSite, splitSitePath, page, handleSiteApi, RESERVED } from './serve.js';
@@ -6,6 +6,7 @@ import { isSiteId } from './util/id.js';
 import { BotCore } from './core/do.js';
 import { handlePanelApi, jsonRes } from './panel/api.js';
 import { loginPage, panelPage, lockedPage } from './panel/ui.js';
+import { homePage } from './panel/home.js';
 import { isAuthed, checkCredentials, issue, cookieHeader, clearCookieHeader, readCookie, lockedFor, noteFail, clearFail, sameOrigin } from './panel/auth.js';
 import { write as logWrite } from './store/logs.js';
 import { ensureSchema } from './store/db.js';
@@ -22,6 +23,9 @@ async function handleFetch(request, env, ctx) {
       if (path === FIXED.panelPath || path.startsWith(`${FIXED.panelPath}/`)) {
         return await panel(request, env, url, missing);
       }
+
+      // 公开首页:不依赖管理员变量/D1/KV,先于 503 守卫返回。
+      if (path === '/') return homePage();
 
       if (missing.length) {
         return page('503', '服务还没有初始化完成:管理员账号未设置,面板登录已关闭', 503,
@@ -127,6 +131,17 @@ async function panel(request, env, url, missing) {
       return jsonRes({ error: '登录功能已关闭' }, 403);
     }
     return html(lockedPage());
+  }
+
+  // D1 / KV 没绑定时,面板接口和页面都直接给可读提示,
+  // 不要放进去让 env.DB.prepare 抛 "Cannot read properties of undefined"。
+  const noStore = missingStorage(env);
+  if (noStore.length) {
+    const msg = `没有正确配置并连接 ${noStore.join('、')}`;
+    if (path.startsWith(`${FIXED.panelPath}/api/`)) {
+      return jsonRes({ error: msg, missing: noStore }, 503);
+    }
+    return page('503', msg, 503, '请在 Cloudflare 后台绑定后刷新本页');
   }
 
   if (path === `${FIXED.panelPath}/api/login`) {

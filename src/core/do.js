@@ -4,7 +4,7 @@ import { logWrite } from '../store/logs.js';
 import { bump, bumpDaily, touchGroup } from '../store/stats.js';
 import * as P from '../store/projects.js';
 import { getFile, mimeFor } from '../store/kvfile.js';
-import { chunkText, toPlainText, truncate } from '../util/text.js';
+import { chunkText, stripMention, toPlainText, truncate } from '../util/text.js';
 import { enhanceFiles } from '../util/seo.js';
 import { fetchAccessToken, deliver } from '../qq/api.js';
 import { runAgent } from '../agent/loop.js';
@@ -156,8 +156,11 @@ export class BotCore {
       const r = await wsStart(this, { force: true });
       return { ok: r.ok, note: r.ok ? '已切换到 WebSocket 模式并连接' : `WebSocket 连接失败:${r.note}`, ws: wsStatus(this) };
     }
+    const hadWs = !!this.ws;
     wsClose(this);
-    return { ok: true, note: '已切换到 WebHook 模式', ws: wsStatus(this) };
+    // 已经是 WebHook 模式时不要每次保存设置都弹「已切换到 WebHook 模式」——
+    // 面板里改一个无关开关也会走 apply,那个提示会让人以为配置被改了。
+    return { ok: true, note: hadWs ? '已切换到 WebHook 模式' : '', ws: wsStatus(this) };
   }
 
   enqueue(payload) {
@@ -222,15 +225,20 @@ Object.assign(BotCore.prototype, {
   async handleMessage(p) {
     const cfg = await this.cfg();
     const convId = p.convId;
-    const text = String(p.text || '').trim();
+    const rawText = String(p.text || '').trim();
+    const text = stripMention(rawText);
+    // QQ 的 GROUP_MESSAGE_CREATE(全量接收)即使 @了机器人,mentioned 也可能是 false。
+    // 只要原文里出现了 <@...>,就按"被 @"处理,否则 /帮助、@我 说话都会被静默丢掉。
+    const hadMention = rawText !== text;
+    const mentioned = p.mentioned !== false || hadMention;
     const log = (m, lv = 'info') => logWrite(this.env, lv, 'chat', m);
 
-    log(`[收到] ${p.scene} ${p.nickname || p.userId || ''} :: ${truncate(text, 120)}`);
+    log(`[收到] ${p.scene} ${p.nickname || p.userId || ''} type=${p.type || '?'} mentioned=${mentioned} :: ${truncate(text, 120)}`);
 
     // 群消息缓存(group_recent / group_find 用):全量接收模式下,没 @机器人 的消息也存下来
     if (p.scene === 'group' && p.targetId && p.mentioned !== undefined && cfg.groupsCacheEnabled) {
       try {
-        this.cacheGroupMessage(cfg, p);
+        this.cacheGroupMessage(cfg, { ...p, text });
       } catch {
         /* 缓存失败不影响对话 */
       }
@@ -238,7 +246,7 @@ Object.assign(BotCore.prototype, {
 
     // 群内全量消息(没 @机器人,即 QQ 后台开了「机器人可查询群内所有消息」之后推来的每一条)
     // 只有 /AI 开头的才触发 Agent,其余静默忽略 —— 否则整个群聊都会被拿去跑 AI。
-    if (p.scene === 'group' && p.mentioned === false && parseAiPrefix(text) === null) {
+    if (p.scene === 'group' && !mentioned && parseAiPrefix(text) === null) {
       return;
     }
 

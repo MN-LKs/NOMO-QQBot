@@ -617,6 +617,26 @@ await t('全量群消息:/AI 开头正常触发(回执+结果)', async () => {
   const receipt = calls.messages[msgBefore];
   assert(receipt.body.msg_id === 'MSG_FULL_2', '回执应是被动回复');
 });
+await t('全量群消息:<@机器人> /AI 前缀也能触发', async () => {
+  const msgBefore = calls.messages.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_f3`, op: 0, s: 7, t: 'GROUP_MESSAGE_CREATE',
+    d: {
+      id: 'MSG_FULL_3',
+      content: '<@1DE88C976BC91D0206BAEB85C5213F0C> /AI 你好',
+      group_openid: 'GROUP_TEST_1',
+      author: { member_openid: 'USER_TEST_1', nickname: '小明' },
+    },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  for (let i = 0; i < 200 && calls.messages.length < msgBefore + 2; i++) await sleep(50);
+  assert(calls.messages.length >= msgBefore + 2, `应收到回执+结果,实际 ${calls.messages.length - msgBefore} 条`);
+  const receipt = calls.messages[msgBefore];
+  assert(receipt.body.msg_id === 'MSG_FULL_3', '回执应是被动回复');
+});
 await t('超窗消息跳过回执,结果用主动消息发回', async () => {
   const before = calls.messages.length;
   const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
@@ -978,10 +998,16 @@ delete bareEnv.DB;
 delete bareEnv.STORE;
 
 await t('未绑定 D1/KV 时,扫描器路径全部 404 而不是 500', async () => {
-  for (const p of ['/', '/ab', '/env', '/env.dev', '/env.prod', '/env.local', '/.env', '/config.json', '/wp-login.php']) {
+  for (const p of ['/ab', '/env', '/env.dev', '/env.prod', '/env.local', '/.env', '/config.json', '/wp-login.php']) {
     const res = await worker.fetch(new Request(`https://panel.example.com${p}`), bareEnv, ctx);
     assert(res.status === 404, `${p} 实际 ${res.status}`);
   }
+});
+await t('首页不依赖 D1/KV,始终 200', async () => {
+  const res = await worker.fetch(new Request('https://panel.example.com/'), bareEnv, ctx);
+  assert(res.status === 200, `实际 ${res.status}`);
+  const text = await res.text();
+  assert(text.includes('NOMO') && text.includes('github.com/MN-LKs/NOMO-QQBot'), '首页内容不完整');
 });
 await t('未绑定 D1/KV 时,合法 ID 给出明确提示而不是 500', async () => {
   const res = await worker.fetch(new Request('https://panel.example.com/abcd1234'), bareEnv, ctx);
