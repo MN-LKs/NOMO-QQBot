@@ -1,7 +1,7 @@
 import { loadEnv, missingEnv, FIXED } from './config.js';
 import { loadCfg, getRaw } from './store/settings.js';
 import { handleWebhook } from './qq/webhook.js';
-import { serveSite, splitSitePath, page } from './serve.js';
+import { serveSite, splitSitePath, page, handleSiteApi, RESERVED } from './serve.js';
 import { isSiteId } from './util/id.js';
 import { BotCore } from './core/do.js';
 import { handlePanelApi, jsonRes } from './panel/api.js';
@@ -37,6 +37,11 @@ export default {
         return await handleWebhook(request, cfg, env);
       }
 
+      if (path === '/api' || path.startsWith('/api/')) {
+        if (!env.DB || !env.STORE) return notReady(env);
+        return await handleSiteApi(env, cfg, request, url);
+      }
+
       const { id } = splitSitePath(path);
       if (id && !RESERVED.has(id.toLowerCase())) {
         // 扫描器天天在找 /env.dev、/.env 这类文件:形状不对的直接 404,不去碰数据库
@@ -62,12 +67,6 @@ export default {
     }
   },
 };
-
-const RESERVED = new Set([
-  'qq', 'api', 'admin', 'administrator', 'health', 'check', 'favicon', 'robots',
-  'index', 's', 'd', 'static', 'assets', '__data', 'cron', 'www', 'app', 'login',
-  'logout', 'null', 'undefined', 'test', 'panel', 'v1',
-]);
 
 function html(body, status = 200, extra = {}) {
   return new Response(body, {

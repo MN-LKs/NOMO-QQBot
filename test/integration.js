@@ -659,6 +659,110 @@ await t('删除 S3 存储', async () => {
   assert(!(after.json.status.stores || []).some((s) => s.id === s3.id), '应已删除');
 });
 
+console.log('\n【站点后端接口】');
+await t('预制模块:页面可 POST/GET 调用(只认勾了「站点后端」的)', async () => {
+  let r = await api('/settings', { method: 'POST', body: { agent: { architectures: ['html', 'prefab', 'custom'] } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  r = await api('/modules/save', { method: 'POST', body: { module: {
+    id: 'echo_site', name: '站点回声', description: '把参数翻倍',
+    code: 'return { got: ctx.args.x, doubled: ctx.args.x * 2 };',
+    params: { type: 'object', properties: { x: { type: 'number' } } },
+    callPoints: ['site'], enabled: true, timeoutMs: 3000,
+  } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+
+  let res = await worker.fetch(new Request('https://panel.example.com/api/echo_site', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '10.9.9.9' },
+    body: JSON.stringify({ x: 21 }),
+  }), env, ctx);
+  assert(res.status === 200, `POST 实际 ${res.status}`);
+  const j = await res.json();
+  assert(j.got === 21 && j.doubled === 42, JSON.stringify(j));
+
+  res = await worker.fetch(new Request('https://panel.example.com/api/echo_site?x=5', {
+    headers: { 'CF-Connecting-IP': '10.9.9.9' },
+  }), env, ctx);
+  const j2 = await res.json();
+  assert(String(j2.got) === '5' && j2.doubled === 10, JSON.stringify(j2));
+
+  r = await api('/modules/save', { method: 'POST', body: { module: { id: 'agent_only', name: '仅Agent', code: 'return 1', callPoints: ['agent'], enabled: true } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  res = await worker.fetch(new Request('https://panel.example.com/api/agent_only', {
+    method: 'POST', headers: { 'CF-Connecting-IP': '10.9.9.9' }, body: '{}',
+  }), env, ctx);
+  assert(res.status === 404, `仅 agent 的模块不该被 HTTP 调用,实际 ${res.status}`);
+
+  res = await worker.fetch(new Request('https://panel.example.com/api/echo_site', {
+    method: 'PUT', headers: { 'CF-Connecting-IP': '10.9.9.9' },
+  }), env, ctx);
+  assert(res.status === 405, `PUT 实际 ${res.status}`);
+});
+await t('自定义后端:_backend.js 由沙盒执行,带站点数据存储', async () => {
+  const { createProject, removeProject } = await import('../src/store/projects.js');
+  const code = 'if (ctx.path === "kv") { if (ctx.method === "POST") { const d = ctx.json(); await ctx.store.set(d.k, d.v); return { saved: true }; } return { one: await ctx.store.get("a"), keys: await ctx.store.list() }; } return { method: ctx.method, path: ctx.path, q: ctx.query, echo: ctx.json() };';
+  const r = await createProject(env, { deploy: {} }, {
+    id: 'backtest', name: '后端测试',
+    files: [
+      { path: 'index.html', content: '<h1>hi</h1>' },
+      { path: '_backend.js', content: code },
+    ],
+  });
+  assert(!r.error, r.error);
+
+  let res = await worker.fetch(new Request('https://panel.example.com/api/kv', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '10.9.9.8', Referer: 'https://panel.example.com/backtest/index.html' },
+    body: JSON.stringify({ k: 'a', v: 'hello' }),
+  }), env, ctx);
+  assert(res.status === 200, `POST 实际 ${res.status}`);
+
+  res = await worker.fetch(new Request('https://panel.example.com/api/kv', {
+    headers: { 'CF-Connecting-IP': '10.9.9.8', Referer: 'https://panel.example.com/backtest/' },
+  }), env, ctx);
+  const j = await res.json();
+  assert(j.one === 'hello', JSON.stringify(j));
+  assert(Array.isArray(j.keys) && j.keys.includes('a'), JSON.stringify(j));
+
+  res = await worker.fetch(new Request('https://panel.example.com/api/other/path?x=1', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '10.9.9.8', Referer: 'https://panel.example.com/backtest/index.html' },
+    body: JSON.stringify({ hi: 1 }),
+  }), env, ctx);
+  const j2 = await res.json();
+  assert(j2.method === 'POST' && j2.path === 'other/path' && j2.q.x === '1' && j2.echo.hi === 1, JSON.stringify(j2));
+
+  res = await worker.fetch(new Request('https://panel.example.com/api/kv', {
+    headers: { 'CF-Connecting-IP': '10.9.9.8' },
+  }), env, ctx);
+  assert(res.status === 404, `没有 Referer 应 404,实际 ${res.status}`);
+
+  res = await worker.fetch(new Request('https://panel.example.com/backtest/_backend.js', {
+    headers: { 'CF-Connecting-IP': '10.9.9.8' },
+  }), env, ctx);
+  assert(res.status === 404, `_backend.js 不能被公开读取,实际 ${res.status}`);
+
+  res = await worker.fetch(new Request('https://panel.example.com/backtest/', {
+    headers: { 'CF-Connecting-IP': '10.9.9.8' },
+  }), env, ctx);
+  assert(res.status === 200 && (await res.text()).includes('hi'), 'index.html 应正常服务');
+
+  await removeProject(env, 'backtest');
+});
+await t('站点接口:每分钟频率限制', async () => {
+  await api('/settings', { method: 'POST', body: { deploy: { apiPerMinute: 10 } } });
+  let last = 0;
+  for (let i = 0; i < 11; i++) {
+    const res = await worker.fetch(new Request('https://panel.example.com/api/echo_site', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '10.7.7.7' },
+      body: '{"x":1}',
+    }), env, ctx);
+    last = res.status;
+  }
+  assert(last === 429, `第 11 次应为 429,实际 ${last}`);
+});
+
 console.log('\n【MCP】');
 let mcpId = '';
 await t('添加 MCP 服务器并自动连接', async () => {

@@ -216,3 +216,17 @@ export async function dataSet(env, id, key, value, quotaBytes) {
   await run(env.DB, 'UPDATE projects SET data_bytes = data_bytes + ? WHERE id = ?', delta, String(id));
   return { ok: true, bytes: size };
 }
+
+export async function dataDel(env, id, key) {
+  const old = await dataGet(env, id, key);
+  if (old === null) return { ok: true };
+  await run(env.DB, 'DELETE FROM sdata WHERE site_id = ? AND k = ?', String(id), String(key));
+  await run(env.DB, 'UPDATE projects SET data_bytes = MAX(0, data_bytes - ?) WHERE id = ?', String(old).length, String(id));
+  return { ok: true };
+}
+
+export async function dataList(env, id, limit = 200) {
+  const rows = await env.DB.prepare('SELECT k FROM sdata WHERE site_id = ? ORDER BY updated_at DESC LIMIT ?')
+    .bind(String(id), Math.max(1, Math.min(1000, Number(limit) || 200))).all();
+  return (rows.results || []).map((r) => r.k);
+}

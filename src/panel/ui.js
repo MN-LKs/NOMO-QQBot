@@ -494,7 +494,7 @@ function pageSettings(){
  setTitle('设置');
  var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
  loadSettings(true).then(function(d){
-  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,dash=s.dashboard||{};
+  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,ag=s.agent||{},dash=s.dashboard||{};
   var headers=function(o){return h(JSON.stringify(o||{},null,0))};
   var mapObj=se.response||{},mapText=Object.keys(mapObj).some(function(k){return mapObj[k]})?JSON.stringify(mapObj):'';
   v.innerHTML=
@@ -578,6 +578,12 @@ function pageSettings(){
    (d.quota.clamped?'<br><b style="color:#b45309">注意:你设置的数量超过容量,保存时会自动降到 '+d.quota.capacity+'。</b>':'')+'</div>'+
    '<div style="margin-top:12px"><button class="btn pri" id="dp-save">保存</button></div></div>'+
 
+  '<div class="card"><h3>部署架构</h3><div class="sub">决定机器人能把网页部署成什么形态,改完立刻生效</div>'+
+   '<div class="line"><div class="g"><b>静态网页</b><span>纯 HTML/CSS/JS 文件,加上 ./__data 简易存储</span></div>'+sw((ag.architectures||['html']).indexOf('html')>=0,'data-t="archHtml"')+'</div>'+
+   '<div class="line"><div class="g"><b>预制后端接口</b><span>页面可以调用「模块」页里勾了「站点后端」的模块</span></div>'+sw((ag.architectures||[]).indexOf('prefab')>=0,'data-t="archPrefab"')+'</div>'+
+   '<div class="line"><div class="g"><b>自定义后端</b><span>页面里放 _backend.js,由沙盒执行,每站带独立数据存储</span></div>'+sw((ag.architectures||[]).indexOf('custom')>=0,'data-t="archCustom"')+'</div>'+
+   '<div class="hint" style="margin-top:12px">开启后,页面里 fetch("/api/…") 会先找同名的预制模块,再找页面所属站点的 _backend.js;有每分钟频率限制。</div></div>'+
+
   '<div class="card"><h3>日志</h3><div class="sub">调试模式会记录更详细的过程,占用更多存储</div>'+
    '<div class="line"><div class="g"><b>调试模式</b><span>记录每次请求、工具参数、上游原始返回</span></div>'+sw(lg.debug,'data-t="debug"')+'</div>'+
    '<div class="row" style="margin-top:13px"><div><label class="f">保留天数</label><input class="t" type="number" id="lg-days" value="'+lg.retentionDays+'"></div>'+
@@ -658,6 +664,18 @@ function bindSettings(v){
  tog('[data-t="debug"]',['logs','debug']);
  tog('[data-t="seEnabled"]',['search','enabled']);
  tog('[data-t="seMerge"]',['search','mergeReader']);
+ var archArr=function(){var out=[];
+  if(v.querySelector('[data-t="archHtml"]').classList.contains('on'))out.push('html');
+  if(v.querySelector('[data-t="archPrefab"]').classList.contains('on'))out.push('prefab');
+  if(v.querySelector('[data-t="archCustom"]').classList.contains('on'))out.push('custom');
+  return out};
+ ['archHtml','archPrefab','archCustom'].forEach(function(k){v.querySelector('[data-t="'+k+'"]').onclick=function(){
+  var node=this,on=!node.classList.contains('on');
+  node.classList.toggle('on',on);
+  var arr=archArr();
+  if(!arr.length){node.classList.toggle('on',true);toast('至少要保留一种架构');return}
+  api('/settings',{method:'POST',body:{agent:{architectures:arr}}}).then(function(){toast('已保存')})
+   .catch(function(e){toast(e.message);render()})}});
  v.querySelector('#gr-addb').onclick=function(){var id=v.querySelector('#gr-add').value.trim();if(!id)return;
   api('/groups',{method:'POST',body:{openid:id,action:'add'}}).then(function(){toast('已添加');render()}).catch(function(e){toast(e.message)})};
  v.querySelector('#ad-addb').onclick=function(){var id=v.querySelector('#ad-add').value.trim();if(!id)return;

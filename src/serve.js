@@ -1,6 +1,10 @@
-import { getProject, bumpHits, dataGet, dataSet } from './store/projects.js';
+import { getProject, bumpHits, dataGet, dataSet, dataDel, dataList } from './store/projects.js';
 import { getFileAuto, mimeFor } from './store/kvfile.js';
 import { bump, bumpDaily } from './store/stats.js';
+import { getModule } from './store/modules.js';
+import { execBackend, sandboxFetch, normalizeBackendResult } from './core/backend.js';
+import { logWrite } from './store/logs.js';
+import { isSiteId } from './util/id.js';
 
 let pending = new Map();
 let pendingVisits = 0;
@@ -87,6 +91,8 @@ export async function serveSite(env, cfg, request, url, ctx) {
   }
 
   const filePath = rest || 'index.html';
+  // 自定义后端只由 /api/ 路由执行,永远不当作静态文件公开
+  if (filePath === '_backend.js') return page('404', `找不到文件 ${filePath}`);
   // 直读 KV(靠魔数判断是否压缩),不再先查一次 D1 文件表 —— 少一次查询,页面更快
   const bytes = await getFileAuto(env, id, filePath);
   if (!bytes) {
@@ -110,4 +116,164 @@ function json(obj, status = 200) {
     status,
     headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
   });
+}
+
+// 保留路径:既不能当站点 ID,也不能从 Referer 里认成站点
+export const RESERVED = new Set([
+  'qq', 'api', 'admin', 'administrator', 'health', 'check', 'favicon', 'robots',
+  'index', 's', 'd', 'static', 'assets', '__data', 'cron', 'www', 'app', 'login',
+  'logout', 'null', 'undefined', 'test', 'panel', 'v1',
+]);
+
+// 站点后端接口:
+//   /api/<模块id>   → 管理员在「模块」里勾了「站点后端」的预制模块(全局,与站点无关)
+//   /api/<任意路径> → 当前页面所属站点的 _backend.js(沙盒执行,站点从 Referer 认)
+// 页面里 fetch("/api/…") 走这里;带每分钟每 IP 的频率限制。
+export async function handleSiteApi(env, cfg, request, url) {
+  const rest = url.pathname.replace(/^\/api\/?/, '');
+  if (!rest) return json({ error: '缺少接口路径' }, 404);
+  const method = request.method.toUpperCase();
+  if (method !== 'GET' && method !== 'POST') return json({ error: '只支持 GET / POST' }, 405);
+
+  const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
+  if (!rateOk(ip, cfg.apiPerMinute || 60)) return json({ error: '请求太频繁,请稍后再试' }, 429);
+
+  const first = rest.split('/')[0];
+
+  // 1) 预制模块
+  if (cfg.canPrefab) {
+    const mod = await getModule(env, first);
+    if (mod && mod.enabled && Array.isArray(mod.callPoints) && mod.callPoints.includes('site')) {
+      const args = method === 'POST' ? await readJsonBody(request) : queryObject(url);
+      const r = await execBackend(mod.code, {
+        args,
+        fetch: (u, init) => sandboxFetch(u, init, mod.timeoutMs),
+        now: () => Date.now(),
+        json: (x) => JSON.parse(String(x)),
+        text: (x) => JSON.stringify(x),
+      }, { timeoutMs: mod.timeoutMs || 5000 });
+      if (!r.ok) {
+        await logWrite(env, 'warn', 'site', `模块 ${mod.id} 接口执行失败:${r.error}`).catch(() => null);
+        return json({ error: `模块执行失败:${r.error}` }, 500);
+      }
+      return backendResponse(r.value);
+    }
+  }
+
+  // 2) 站点自定义后端(_backend.js)
+  if (cfg.canCustomBackend) {
+    const siteId = siteFromReferer(request);
+    if (siteId && isSiteId(siteId)) {
+      const p = await getProject(env, siteId);
+      if (p && Number(p.expires_at) > Date.now()) {
+        const codeBytes = await getFileAuto(env, siteId, '_backend.js');
+        if (codeBytes) {
+          const bodyText = method === 'POST' ? await request.text() : '';
+          if (bodyText.length > 256 * 1024) return json({ error: '请求体太大' }, 413);
+          const r = await execBackend(new TextDecoder().decode(codeBytes), {
+            method,
+            path: rest,
+            query: queryObject(url),
+            headers: publicHeaders(request),
+            body: bodyText,
+            json: () => JSON.parse(bodyText || '{}'),
+            store: {
+              get: (k) => dataGet(env, siteId, k),
+              set: async (k, v) => {
+                const rr = await dataSet(env, siteId, String(k), typeof v === 'string' ? v : JSON.stringify(v), cfg.dataQuotaBytes);
+                if (rr.error) throw new Error(rr.error);
+                return true;
+              },
+              del: (k) => dataDel(env, siteId, k),
+              list: () => dataList(env, siteId),
+            },
+            fetch: (u, init) => sandboxFetch(u, init, 15000),
+            now: () => Date.now(),
+          }, { timeoutMs: 5000 });
+          if (!r.ok) {
+            await logWrite(env, 'warn', 'site', `站点 ${siteId} 后端执行失败:${r.error}`).catch(() => null);
+            return json({ error: `后端执行失败:${r.error}` }, 500);
+          }
+          return backendResponse(r.value);
+        }
+      }
+    }
+  }
+
+  return json({ error: '没有这个接口' }, 404);
+}
+
+function backendResponse(value) {
+  const out = normalizeBackendResult(value);
+  return new Response(out.body, {
+    status: out.status,
+    headers: {
+      'Content-Type': out.contentType,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      ...out.headers,
+    },
+  });
+}
+
+const apiHits = new Map();
+function rateOk(ip, perMinute) {
+  const now = Date.now();
+  const cur = apiHits.get(ip);
+  if (!cur || now - cur.at >= 60000) {
+    if (apiHits.size > 4000) {
+      for (const [k, v] of apiHits) if (now - v.at >= 120000) apiHits.delete(k);
+    }
+    apiHits.set(ip, { n: 1, at: now });
+    return true;
+  }
+  cur.n += 1;
+  return cur.n <= perMinute;
+}
+
+function siteFromReferer(request) {
+  const ref = request.headers.get('Referer') || request.headers.get('Referrer') || '';
+  if (!ref) return '';
+  try {
+    const u = new URL(ref);
+    const first = u.pathname.split('/').filter(Boolean)[0] || '';
+    let id = first;
+    try {
+      id = decodeURIComponent(first);
+    } catch {
+      /* 原样用 */
+    }
+    if (!id || RESERVED.has(id.toLowerCase())) return '';
+    return id;
+  } catch {
+    return '';
+  }
+}
+
+function queryObject(url) {
+  const out = {};
+  for (const [k, v] of url.searchParams) out[k] = v;
+  return out;
+}
+
+async function readJsonBody(request) {
+  const t = await request.text();
+  if (!t || t.length > 256 * 1024) return {};
+  try {
+    const v = JSON.parse(t);
+    if (v && typeof v === 'object') return v;
+    return { value: v };
+  } catch {
+    return { value: t.slice(0, 2000) };
+  }
+}
+
+function publicHeaders(request) {
+  const out = {};
+  request.headers.forEach((v, k) => {
+    const lk = k.toLowerCase();
+    if (lk === 'cookie') return;
+    out[lk] = v;
+  });
+  return out;
 }

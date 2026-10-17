@@ -65,7 +65,7 @@ ${cfg.canCustomBackend ? '' : '没有列出的功能如果确实需要后端,告
 - 里面直接写语句,用 return 返回结果;也可以定义 \`async function main(ctx)\` 再调用。
 - ctx 提供:ctx.method、ctx.path、ctx.query(对象)、ctx.headers(对象)、ctx.body(字符串)、ctx.json()(解析请求体)、ctx.store.get(k)/ctx.store.set(k,v)/ctx.store.del(k)/ctx.store.list()(站点数据存储)、ctx.fetch(url, init)(出网请求,禁内网)、ctx.log(...)。
 - return 对象 → 按 JSON 返回;return 字符串 → 按纯文本返回;也可以 return {status, contentType, body, headers} 自定义。
-- 页面里 fetch("/api/任意路径") 就会执行它,ctx.path 能拿到 "/api/" 后面的部分做路由。
+- 页面里 fetch("/api/任意路径") 就会执行它(接口按「页面所属站点」认领,所以要从部署出去的页面里调用),ctx.path 能拿到 "/api/" 后面的部分做路由。
 - 注意这是沙盒 JS,支持:let/const/var、if/for/while、函数与箭头函数、模板字符串、对象/数组、try/catch、await。不支持:import、class、new(除 Error)、解构、展开。`);
   }
 
