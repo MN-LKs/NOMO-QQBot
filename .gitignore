@@ -25,8 +25,8 @@ yarn-debug.log*
 yarn-error.log*
 
 # local env files
-.env*.local
 .env
+.env.*
 
 # vercel
 .vercel
@@ -36,7 +36,7 @@ yarn-error.log*
 next-env.d.ts
 
 # ---- 本项目补充 ----
-.dev.vars
+.dev.vars*
 .wrangler/
 .wrangler.toml.bak
 *.log

@@ -197,7 +197,7 @@
 
 ## 八、安全
 
-- [ ] 8.1 面板密码只存环境变量,不回显
+- [ ] 8.1 面板密码只存 Cloudflare 环境变量 / Secret,不回显
 - [ ] 8.2 登录 Cookie 使用 HMAC 签名
 - [ ] 8.3 登录失败锁定
 - [ ] 8.4 登录接口同源检查
@@ -208,7 +208,9 @@
 - [ ] 8.9 全站 HSTS / nosniff / Referrer-Policy / Permissions-Policy
 - [ ] 8.10 `robots.txt` 屏蔽 `/administrator`
 - [ ] 8.11 提交前敏感信息扫描
-- [ ] 8.12 静态自检:语法、import、脚本、文档链接
+- [ ] 8.12 静态自检:语法、import、硬编码绝对路径、脚本、文档链接
+- [ ] 8.13 `wrangler.toml` 开启 `keep_vars = true`,部署不会清掉后台变量
+- [ ] 8.14 管理员账号用 Secret 类型,不写进 `[vars]`
 
 ---
 

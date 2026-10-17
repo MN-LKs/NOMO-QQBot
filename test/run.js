@@ -18,6 +18,9 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 let pass = 0;
 const fails = [];
@@ -61,11 +64,11 @@ ok('sandbox 标志透传', flatten(deepMerge(DEFAULT_SETTINGS, { qq: { sandbox: 
 ok('默认不是沙箱', cfg1.sandbox === false);
 eq('缺环境变量', missingEnv({}), ['ADMIN_USER', 'ADMIN_PASS']);
 {
-  const toml = fs.readFileSync(path.join(process.cwd(), 'wrangler.toml'), 'utf8');
+  const toml = fs.readFileSync(path.join(ROOT, 'wrangler.toml'), 'utf8');
   ok('wrangler.toml 开启 keep_vars', /^keep_vars\s*=\s*true/m.test(toml));
   ok('wrangler.toml 没有活动 [vars]', !/^\[vars\]/m.test(toml));
   ok('wrangler.toml 没有明文管理员变量', !/^ADMIN_(?:USER|PASS)\s*=/m.test(toml));
-  const jsmini = fs.readFileSync(path.join(process.cwd(), 'test/jsmini.test.mjs'), 'utf8');
+  const jsmini = fs.readFileSync(path.join(ROOT, 'test/jsmini.test.mjs'), 'utf8');
   ok('jsmini 测试没有本机绝对路径', !/['"`]\/(?:workspace|home|Users)\//.test(jsmini));
 }
 eq('环境变量齐全', missingEnv(env1), []);

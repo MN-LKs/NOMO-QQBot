@@ -11,8 +11,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = process.cwd();
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SKIP_DIRS = new Set(['node_modules', '.git', '.wrangler', '.backups', '.idea', '__pycache__']);
 const CHECK_DIRS = ['src', 'test', 'tools'];
 const REQUIRED_DOCS = [
