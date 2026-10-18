@@ -6,7 +6,7 @@ import * as P from '../store/projects.js';
 import { getFile, mimeFor } from '../store/kvfile.js';
 import { chunkText, stripMention, toPlainText, truncate } from '../util/text.js';
 import { enhanceFiles } from '../util/seo.js';
-import { fetchAccessToken, deliver, deliverMedia, muteGroupMember, unmuteGroupMember, explainError } from '../qq/api.js';
+import { fetchAccessToken, deliver, deliverMedia, muteGroupMember, unmuteGroupMember, explainError, sendGroupMarkdown, sendC2CMarkdown } from '../qq/api.js';
 import { runAgent } from '../agent/loop.js';
 import { buildCompressPrompt, buildHelpText, buildHelpMarkdown, buildMenuText } from '../agent/prompt.js';
 import { chatWithFallback } from '../agent/llm.js';
@@ -223,6 +223,7 @@ export class BotCore {
 
   async runJob(job) {
     if (job.kind === 'message') return await this.handleMessage(job.payload);
+    if (job.kind === 'interaction') return await this.handleInteraction(job.payload);
     return null;
   }
 
@@ -250,10 +251,11 @@ Object.assign(BotCore.prototype, {
     const rawText = String(p.text || '').trim();
     const text = stripMention(rawText);
     const incoming = incomingContext(p);
-    // QQ 的 GROUP_MESSAGE_CREATE(全量接收)即使 @了机器人,mentioned 也可能是 false。
-    // 只要原文里出现了 <@...>,就按"被 @"处理,否则 /帮助、@我 说话都会被静默丢掉。
-    const hadMention = rawText !== text;
-    const mentioned = p.mentioned !== false || hadMention;
+    // 只有 QQ 明确判定「@机器人」或单聊才按被提到处理。
+    // 全量接收时内容里出现 <@别人> 不再算 @机器人,否则 @任何人都会触发。
+    const mentioned = p.scene === 'c2c' ? true : p.mentioned === true;
+    const cmd = parseCommand(text);
+    const aiBody = parseAiPrefix(text);
     const log = (m, lv = 'info') => logWrite(this.env, lv, 'chat', m);
 
     log(`[收到] ${p.scene} ${p.nickname || p.userId || ''} type=${p.type || '?'} mentioned=${mentioned} :: ${truncate(text, 120)}`
@@ -268,9 +270,13 @@ Object.assign(BotCore.prototype, {
       }
     }
 
-    // 群内全量消息(没 @机器人,即 QQ 后台开了「机器人可查询群内所有消息」之后推来的每一条)
-    // 只有 /AI 开头的才触发 Agent,其余静默忽略 —— 否则整个群聊都会被拿去跑 AI。
-    if (p.scene === 'group' && !mentioned && parseAiPrefix(text) === null) {
+    // 全量群消息只有两种触发:AI<空格>正文、/AI<空格>正文,或以 / 开头的命令。
+    // 「你看这个AI」「尝试用/帮助」「@别人」都静默忽略。
+    if (p.scene === 'group' && !mentioned && aiBody === null && !cmd.name) {
+      return;
+    }
+    // 无参数命令后面多写了内容就不触发,例如「/帮助 好垃圾」。
+    if (NO_ARG_COMMANDS.has(cmd.name) && cmd.args) {
       return;
     }
 
@@ -293,8 +299,6 @@ Object.assign(BotCore.prototype, {
     await bump(this.env, 'messages', 1).catch(() => null);
     await bumpDaily(this.env, 'messages', 1).catch(() => null);
 
-    const cmd = parseCommand(text);
-
     if (cmd.name === 'info') {
       const lines = [
         '🪪 你的信息',
@@ -309,7 +313,7 @@ Object.assign(BotCore.prototype, {
       return;
     }
 
-    if (cmd.name === 'help' || cmd.name === 'menu' || (!text && !cmd.name && !incoming.attachments)) {
+    if (cmd.name === 'help' || cmd.name === 'menu' || (mentioned && !text && !cmd.name && !incoming.attachments)) {
       const isMenu = cmd.name === 'menu' || (!text && !cmd.name);
       const content = isMenu
         ? buildMenuText(cfg, { markdown: cfg.markdownEnabled })
@@ -358,20 +362,17 @@ Object.assign(BotCore.prototype, {
       await this.handleAdminAction(p, cmd.name, cmd.args, cfg);
       return;
     }
-    if (cmd.name === 'confirm' || cmd.name === 'cancel') {
-      await this.handleDeployConfirm(p, cmd.name, cmd.args, cfg);
-      return;
-    }
 
-    let body = cmd.name === 'ai' ? cmd.args : text;
-    if (cmd.name !== 'ai') {
-      // '/AI你好' 这种没空格的写法 parseCommand 认不出来,这里手动剥掉前缀
-      const stripped = parseAiPrefix(text);
-      if (stripped !== null) body = stripped;
-    }
+    // 触发正文:AI<空格>正文 / /AI<空格>正文;或被 @机器人 后直接说话。
+    // 只 @了别人、或普通闲聊不发任何消息。
+    let body = aiBody;
+    if (!body && mentioned && text && !cmd.name) body = text;
     if (!body && incoming.attachments) body = '请看看我发的内容。';
     if (!body) {
-      await this.reply(p, buildMenuText(cfg, { markdown: cfg.markdownEnabled }), { markdown: cfg.markdownEnabled });
+      // 只有 @机器人 但没写正文时才发菜单。
+      if (mentioned && !text && !incoming.attachments) {
+        await this.reply(p, buildMenuText(cfg, { markdown: cfg.markdownEnabled }), { markdown: cfg.markdownEnabled });
+      }
       return;
     }
 
@@ -517,6 +518,7 @@ Object.assign(BotCore.prototype, {
       chunks,
       mode,
       msgId: p.messageId,
+      eventId: p.eventId,
       msgSeqStart: this.nextSeq(p),
       markdown: opts.markdown === true && cfg.markdownEnabled === true,
     });
@@ -682,7 +684,6 @@ Object.assign(BotCore.prototype, {
       token,
       url: base ? `${base}/confirm/${token}` : '',
       expiresAt,
-      fallback: `/确认 ${token}`,
     };
   },
 
@@ -948,6 +949,112 @@ Object.assign(BotCore.prototype, {
     return ['找到这些群:', ...list.map((g) => `· ${g.name || '(未命名)'} | openID=${g.openid} | 消息 ${Number(g.msg_count || 0)} 条 | 最近活跃 ${ago(g.last_seen)}`)].join('\n');
   },
 
+  async sendDeployCard(p, pending, cfg) {
+    if (!p?.targetId || !p?.scene) return { ok: false, error: '没有会话目标' };
+    const token = await this.getToken();
+    const admins = (cfg.settings.admin.openIds || []).map((x) => String(x.openid || '')).filter(Boolean);
+    const permission = admins.length
+      ? { type: 0, specify_user_ids: admins.slice(0, 10) }
+      : { type: 1 };
+    const buttons = [
+      {
+        id: 'approve',
+        render_data: { label: '确认部署', visited_label: '已确认', style: 1 },
+        action: {
+          type: 1,
+          permission,
+          data: `approve:${pending.token}`,
+          unsupport_tips: '请升级 QQ 版本后重试',
+          reply: false,
+        },
+      },
+      {
+        id: 'cancel',
+        render_data: { label: '取消', visited_label: '已取消', style: 0 },
+        action: {
+          type: 1,
+          permission,
+          data: `cancel:${pending.token}`,
+          unsupport_tips: '请升级 QQ 版本后重试',
+          reply: false,
+        },
+      },
+    ];
+    const keyboard = { content: { rows: [{ buttons }] } };
+    const files = Array.isArray(pending.files) ? pending.files : [];
+    const content = [
+      '## 待确认部署',
+      `**项目**:${String(pending.name || '未命名项目').slice(0, 60)}`,
+      pending.description ? `**说明**:${String(pending.description).slice(0, 120)}` : '',
+      `**文件**:${files.map((f) => f.path).slice(0, 6).join('、') || '—'}`,
+      '',
+      '确认后才会真正创建项目,10 分钟内有效。',
+    ].filter(Boolean).join('\n');
+    const common = {
+      content,
+      keyboard,
+      msgId: p.messageId,
+      msgSeq: this.nextSeq(p),
+    };
+    if (p.scene === 'group') {
+      return await sendGroupMarkdown(cfg, token, { ...common, groupOpenid: p.targetId });
+    }
+    return await sendC2CMarkdown(cfg, token, { ...common, openid: p.targetId });
+  },
+
+  async handleInteraction(p) {
+    const cfg = await this.cfg();
+    const [action, token] = String(p.buttonData || '').split(':');
+    if (!token || (action !== 'approve' && action !== 'cancel')) return;
+    const adminP = {
+      scene: p.scene,
+      targetId: p.targetId,
+      userId: p.userId,
+      memberRole: p.memberRole || '',
+      convId: p.convId,
+    };
+    const replyP = {
+      scene: p.scene,
+      targetId: p.targetId,
+      eventId: p.eventId,
+      convId: p.convId,
+      nickname: '系统',
+    };
+    if (!this.isAdmin(cfg, adminP)) {
+      await this.reply(replyP, '你没有权限操作这个部署确认。', { mode: 'passive' });
+      return;
+    }
+    const r = await this.resolvePending(token, action === 'approve', { notify: false });
+    if (r.error) {
+      await this.reply(replyP, r.error, { mode: 'passive' });
+      return;
+    }
+    const resultText = r.canceled
+      ? '已取消这次部署,没有创建项目。'
+      : `部署成功 ✅\n项目:${r.site.name}\n链接:${r.site.url}\n存活 ${r.site.ttlMinutes} 分钟。`;
+    await this.reply(replyP, resultText, { mode: 'passive' });
+    try {
+      const follow = await runAgent({
+        cfg,
+        core: this,
+        convId: p.convId,
+        userText: `系统通知:${resultText}\n请根据这个结果继续处理,并把结果用自然语言告诉用户。`,
+        meta: { botName: 'NOMO', nickname: '系统', p: replyP },
+        log: (m, lv = 'info') => logWrite(this.env, lv, 'chat', m),
+      });
+      const text = String(follow.reply || '').trim();
+      if (text) {
+        await this.reply(replyP, text, { mode: 'passive', markdown: cfg.markdownEnabled });
+        this.appendMessages(p.convId, [
+          { role: 'user', content: `系统通知:${resultText}` },
+          { role: 'assistant', content: truncate(text, 2500) },
+        ]);
+      }
+    } catch (e) {
+      await logWrite(this.env, 'warn', 'interaction', `确认后继续 Agent 失败:${e?.message || e}`);
+    }
+  },
+
   async handleMotd(p, args, cfg) {
     if (cfg.motdEnabled === false) {
       await this.reply(p, 'MOTD 查询已在面板关闭。');
@@ -992,28 +1099,6 @@ Object.assign(BotCore.prototype, {
       }
     }
     await this.reply(p, text);
-  },
-
-  async handleDeployConfirm(p, action, args, cfg) {
-    if (!this.isAdmin(cfg, p)) {
-      await this.reply(p, '只有面板里配置的管理员才能确认部署。');
-      return;
-    }
-    const token = String(args || '').trim().split(/\s+/)[0];
-    if (!token) {
-      await this.reply(p, `用法:/确认 ${action === 'cancel' ? '或 /取消部署 ' : ''}<token>`);
-      return;
-    }
-    const r = await this.resolvePending(token, action === 'confirm', { notify: false });
-    if (r.error) {
-      await this.reply(p, r.error);
-      return;
-    }
-    if (r.canceled) {
-      await this.reply(p, '已取消这次部署。');
-      return;
-    }
-    await this.reply(p, `部署成功 ✅\n项目:${r.site.name}\n链接:${r.site.url}\n存活 ${r.site.ttlMinutes} 分钟。`);
   },
 
   async handleAdminAction(p, action, args, cfg) {
@@ -1069,7 +1154,7 @@ Object.assign(BotCore.prototype, {
   },
 });
 
-function parseCommand(text) {
+export function parseCommand(text) {
   const t = String(text || '').trim();
   if (!t.startsWith('/')) return { name: '', args: '' };
   const m = t.match(/^\/([^\s]+)\s*([\s\S]*)$/);
@@ -1084,19 +1169,23 @@ function parseCommand(text) {
     状态: 'status', status: 'status',
     motd: 'motd', 服务器: 'motd', 查服务器: 'motd', 服务器状态: 'motd',
     禁言: 'mute', mute: 'mute', 解禁: 'unmute', unmute: 'unmute', 踢人: 'kick', kick: 'kick',
-    确认: 'confirm', 确认部署: 'confirm', confirm: 'confirm', 取消部署: 'cancel',
     查信息: 'info', info: 'info', whoami: 'info', 我的信息: 'info', 查id: 'info',
   };
   return { name: map[raw] || '', args };
 }
 
+export const NO_ARG_COMMANDS = new Set(['help', 'menu', 'status', 'memory', 'delete', 'compress', 'info']);
+
 /**
- * '/AI 问题'、'/ai问题' 都算 AI 触发;返回剥掉前缀后的正文。
- * 不是 AI 触发返回 null(注意区分:触发但正文为空返回 '')。
+ * 只认两种 AI 触发:
+ *   AI 你好 / AI<空格>你好
+ *   /AI 你好
+ * 正文必须有内容;「你看这个AI」「AI你好」都不算。
  */
-function parseAiPrefix(text) {
-  const m = String(text || '').match(/^\/ai\b\s*([\s\S]*)$/i);
-  return m ? m[1].trim() : null;
+export function parseAiPrefix(text) {
+  const s = String(text || '');
+  const m = s.match(/^\/ai[ \t]+([\s\S]*)$/i) || s.match(/^AI[ \t]+([\s\S]*)$/i);
+  return m && m[1].trim() ? m[1].trim() : null;
 }
 
 function genId(charset = 'ascii', len = 8) {

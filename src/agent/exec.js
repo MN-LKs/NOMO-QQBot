@@ -360,12 +360,24 @@ export async function executeTool(name, args, ctx) {
             owner: ctx.convId,
           }, ctx.meta?.p);
           if (pending.error) return pending.error;
+          const sent = await ctx.core.sendDeployCard(ctx.meta?.p, {
+            token: pending.token,
+            name: a.name,
+            description: a.description,
+            files,
+          }, ctx.cfg);
+          const cardFail = sent?.error || '';
+          const webUrl = pending.url || '';
           return [
-            '已创建待确认部署 ⏳',
+            cardFail ? `确认卡片发送失败(${cardFail})` : '已创建待确认部署 ⏳',
             `项目名: ${a.name || '未命名项目'}`,
             `文件: ${files.map((f) => f.path).join(', ')}`,
-            pending.url ? `确认链接: ${pending.url}` : `确认指令: ${pending.fallback}`,
-            '【重要】把确认链接/指令原样告诉用户;管理员确认后才会真正部署,10 分钟内有效。',
+            cardFail
+              ? (webUrl
+                ? `管理员可以在网页上确认:${webUrl}(10 分钟内有效)`
+                : '确认卡片和网页链接都不可用,请管理员检查站点域名或稍后重试。')
+              : '确认卡片已经发到群里,等待管理员点击「确认部署」或「取消」。',
+            '【重要】不要自己创建项目;管理员确认后系统会继续处理。',
           ].join('\n');
         }
         const r = await ctx.core.createSite({

@@ -1,6 +1,6 @@
 {
   "name": "nomo-qqbot",
-  "version": "4.0.0",
+  "version": "4.2.0",
   "private": true,
   "description": "NOMO-QQBot:QQ 官方机器人 + AI Agent + 在线部署,运行在 Cloudflare Workers 上,自带管理面板",
   "type": "module",

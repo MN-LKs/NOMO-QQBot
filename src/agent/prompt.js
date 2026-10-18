@@ -165,7 +165,7 @@ export function buildHelpText(cfg) {
     '· /禁言 @某人 10 —— 管理员禁言(分钟,最长 30 天)',
     '· /解禁 @某人 —— 解除禁言',
   );
-  if (cfg.deployConfirm) lines.push('· /确认 <token> —— 管理员确认待部署项目');
+  if (cfg.deployConfirm) lines.push('· 部署前会发一张确认卡片,管理员在卡片上点「确认部署」或「取消」');
   if (cfg.canDeploy) lines.push('', '试试对我说:「帮我做个 2048 小游戏」');
   return lines.join('\n');
 }
@@ -196,7 +196,7 @@ export function buildMenuText(cfg, { markdown = true } = {}) {
     '- `/查信息` 查看你的 openID 与群 openID',
   ];
   if (cfg.motdEnabled !== false) lines.push('- `/motd <IP或域名>` 查 Minecraft 服务器状态');
-  if (cfg.deployConfirm) lines.push('- `/确认 <token>` 管理员确认待部署项目');
+  if (cfg.deployConfirm) lines.push('- 部署前会发一张确认卡片,管理员在卡片上点「确认部署」或「取消」');
   if (cfg.canDeploy) lines.push('- 说「帮我做个网页/小游戏」,我会直接部署并给你链接');
   lines.push('- 联网搜索与深度思考已开启:问「最新消息」或「认真想想」即可');
   const text = lines.join('\n');

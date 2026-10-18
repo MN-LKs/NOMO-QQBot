@@ -335,6 +335,46 @@ await t('面板部署一个项目', async () => {
   pid = r.json.id;
   assert(/^[a-z0-9]{8}$/.test(pid), `ID 应为 8 位:${pid}`);
 });
+await t('部署确认卡片:管理员点击才创建项目', async () => {
+  await api('/settings', { method: 'POST', body: { admin: { openIds: [{ openid: 'USER_TEST_1' }] }, deploy: { confirm: true } } });
+  resetDoCfg();
+  const core = env.BOT_CORE.core('core');
+  const p = { scene: 'group', targetId: 'GROUP_TEST_1', messageId: 'MSG_CARD', convId: 'g:GROUP_TEST_1' };
+  const pending = await core.createPendingDeploy({
+    name: '卡片确认', description: '确认后创建', owner: 'g:GROUP_TEST_1',
+    files: [{ path: 'index.html', content: '<h1>ok</h1>' }],
+  }, p);
+  let r = await core.sendDeployCard(p, { token: pending.token, name: '卡片确认', description: '确认后创建', files: [{ path: 'index.html', content: '<h1>ok</h1>' }] }, await core.cfg());
+  assert(r.ok, JSON.stringify(r));
+  const card = calls.messages.find((m) => m.body.keyboard?.content?.rows?.[0]?.buttons?.length === 2);
+  assert(card, '应发出带两个按钮的卡片');
+  const btn = card.body.keyboard.content.rows[0].buttons[0];
+  assert(btn.action.data === `approve:${pending.token}`, JSON.stringify(btn.action));
+  assert(btn.action.permission.type === 0 && btn.action.permission.specify_user_ids.includes('USER_TEST_1'), JSON.stringify(btn.action.permission));
+
+  // 非管理员点击:不创建项目
+  await core.handleInteraction({
+    scene: 'group', targetId: 'GROUP_TEST_1', userId: 'USER_GUEST', memberRole: 'member',
+    convId: 'g:GROUP_TEST_1', eventId: 'EV_CARD_1', buttonData: `approve:${pending.token}`,
+  });
+  assert(await core.getPending(pending.token) !== null, '非管理员点击不应消费 pending');
+  const denied = calls.messages.find((m) => String(m.body.content || '').includes('没有权限'));
+  assert(denied, '非管理员应收到无权限提示');
+
+  // 管理员点击:创建项目
+  await core.handleInteraction({
+    scene: 'group', targetId: 'GROUP_TEST_1', userId: 'USER_TEST_1', memberRole: 'member',
+    convId: 'g:GROUP_TEST_1', eventId: 'EV_CARD_2', buttonData: `approve:${pending.token}`,
+  });
+  assert(await core.getPending(pending.token) === null, '管理员点击后 pending 应被消费');
+  const ok = calls.messages.find((m) => String(m.body.content || '').includes('部署成功'));
+  assert(ok, '管理员点击后应收到部署成功');
+  const created = await core.listSites();
+  const site = created.find((x) => x.name === '卡片确认');
+  assert(site, '应真正创建了项目');
+  await core.deleteSite(site.id);
+  await api('/settings', { method: 'POST', body: { deploy: { confirm: false } } });
+});
 await t('部署确认:创建待确认、确认后创建项目', async () => {
   const core = env.BOT_CORE.core('core');
   const pending = await core.createPendingDeploy({
@@ -540,7 +580,7 @@ await t('群消息走通全链路并回复到群里', async () => {
     op: 0,
     s: 1,
     t: 'GROUP_AT_MESSAGE_CREATE',
-    d: { id: 'MSG_TEST_1', content: '你好', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+    d: { id: 'MSG_TEST_1', content: '/AI 你好', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
   });
   const keys = await keysFromSecret('test-app-secret-not-real');
   const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
@@ -568,7 +608,7 @@ await t('关闭开关后,名单内的群仍可用', async () => {
   const ts = String(Math.floor(Date.now() / 1000));
   const body = JSON.stringify({
     id: `EV_${Date.now()}_listed`, op: 0, s: 9, t: 'GROUP_AT_MESSAGE_CREATE',
-    d: { id: 'MSG_TEST_9', content: '还在吗', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+    d: { id: 'MSG_TEST_9', content: 'AI 还在吗', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
   });
   const keys = await keysFromSecret('test-app-secret-not-real');
   const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
@@ -624,6 +664,28 @@ await t('查信息指令返回 openID', async () => {
   assert(msg.body.content.includes('GROUP_TEST_1'), msg.body.content);
 });
 
+await t('触发规则:只有 AI 开头或 /AI 开头才触发 Agent', async () => {
+  const quiet = async (content, t = 'GROUP_MESSAGE_CREATE') => {
+    const before = calls.messages.length;
+    const ts = String(Math.floor(Date.now() / 1000));
+    const body = JSON.stringify({
+      id: `EV_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, op: 0, s: 8, t,
+      d: { id: `MSG_T_${Date.now()}`, content, group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+    });
+    const keys = await keysFromSecret('test-app-secret-not-real');
+    const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+    await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+    await sleep(600);
+    return calls.messages.length - before;
+  };
+  assert(await quiet('你看这个AI') === 0, '正文中间的 AI 不该触发');
+  assert(await quiet('AI你好') === 0, 'AI 后面没空格不该触发');
+  assert(await quiet('尝试用/帮助') === 0, '命令不在开头不该触发');
+  assert(await quiet('/帮助 好垃圾') === 0, '无参数命令带多余内容不该触发');
+  assert(await quiet('<@!OTHER_USER> 你好') === 0, '@别人不该触发');
+  assert(await quiet('AI 你好') >= 2, 'AI 空格正文应触发');
+  assert(await quiet('/帮助') >= 1, '/帮助 应触发');
+});
 await t('Markdown 模式:帮助以 msg_type=2 发送', async () => {
   await api('/settings', { method: 'POST', body: { qq: { markdown: true } } });
   const ts = String(Math.floor(Date.now() / 1000));
@@ -704,7 +766,7 @@ await t('超窗消息跳过回执,结果用主动消息发回', async () => {
     body: JSON.stringify({
       eventId: `EV_OLD_${Date.now()}`, kind: 'message', scene: 'group', mentioned: true,
       convId: 'g:GROUP_TEST_1', targetId: 'GROUP_TEST_1', messageId: 'MSG_OLD_1',
-      userId: 'USER_TEST_1', nickname: '小明', text: '你好',
+      userId: 'USER_TEST_1', nickname: '小明', text: 'AI 你好',
       ts: Date.now() - 10 * 60 * 1000,
     }),
   });

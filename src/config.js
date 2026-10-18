@@ -24,7 +24,7 @@ export const FIXED = {
   skillMaxInject: 6000,
   moduleMaxCode: 20000,
   siteApiPerMinute: 60,
-  appVersion: '4.1.0',
+  appVersion: '4.2.0',
   updateRepo: 'MN-LKs/NOMO-QQBot',
 };
 
@@ -73,8 +73,8 @@ export const DEFAULT_SETTINGS = {
     cacheKV: true,
     stores: [],
   },
-  dashboard: { url: 'https://manage.nexacode.dpdns.org/api/dashboard' },
-  qq: { appId: '', appSecret: '', mode: 'webhook', sandbox: false, intents: 33554432, answerDelivery: 'auto', markdown: false },
+  dashboard: { url: '' },
+  qq: { appId: '', appSecret: '', mode: 'webhook', sandbox: false, intents: 100663296, answerDelivery: 'auto', markdown: false },
   persona: '',
   admin: { openIds: [], groupAdmins: false },
   groups: {
@@ -261,7 +261,7 @@ export function flatten(settings, env = {}) {
     appId: String(qq.appId || '').trim(),
     appSecret: String(qq.appSecret || '').trim(),
     mode: qq.mode === 'websocket' ? 'websocket' : 'webhook',
-    intents: Number(qq.intents) || 33554432,
+    intents: Number(qq.intents) || 100663296,
     llmBaseUrl: normalizeApiBase(llm.baseUrl),
     llmApiKey: String(llm.apiKey || '').trim(),
     llmModel: String(llm.model || 'deepseek-v4.1-flash').trim(),

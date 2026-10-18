@@ -5,6 +5,7 @@ import { quotaOf } from '../src/store/projects.js';
 import { splitSitePath } from '../src/serve.js';
 import { isSiteId, genSiteId, isReservedPath } from '../src/util/id.js';
 import { chunkText, stripMention, toPlainText, truncate, clipMiddle } from '../src/util/text.js';
+import { parseCommand, parseAiPrefix, NO_ARG_COMMANDS } from '../src/core/do.js';
 import { calc, formatNumber } from '../src/util/calc.js';
 import { handleFrame, wsStatus, wsClose } from '../src/qq/gateway.js';
 import { panelPage, loginPage, lockedPage } from '../src/panel/ui.js';
@@ -165,7 +166,7 @@ eq('AI 地址缺协议也能用', flatten(deepMerge(DEFAULT_SETTINGS, { llm: { b
 eq('搜索地址缺协议也能推出端点', flatten(deepMerge(DEFAULT_SETTINGS, { search: { baseUrl: 'search.x.com/v1' } }), env1).searchApiUrl, 'https://search.x.com/v1/search');
 eq('站点域名缺协议自动补全', flatten(deepMerge(DEFAULT_SETTINGS, { site: { publicBaseUrl: 'ai.example.com/' } }), env1).publicBaseUrl, 'https://ai.example.com');
 eq('站点域名 http 升级 https', flatten(deepMerge(DEFAULT_SETTINGS, { site: { publicBaseUrl: 'http://ai.example.com' } }), env1).publicBaseUrl, 'https://ai.example.com');
-eq('中转站面板默认地址', cfgA.dashboardUrl, 'https://manage.nexacode.dpdns.org/api/dashboard');
+eq('中转站面板默认不写死地址', cfgA.dashboardUrl, '');
 eq('中转站面板可清空', flatten(deepMerge(DEFAULT_SETTINGS, { dashboard: { url: '' } }), env1).dashboardUrl, '');
 
 // ---------- 扩展 / 技能 / 存储 ----------
@@ -280,6 +281,13 @@ ok('toPlainText 去 Markdown', !toPlainText('**粗**').includes('**'));
 eq('stripMention 去掉 @机器人', stripMention('<@1DE88C976BC91D0206BAEB85C5213F0C> /AI 你好'), '/AI 你好');
 eq('stripMention 去掉 <@!...>', stripMention('<@!123> /帮助'), '/帮助');
 eq('stripMention 不动正文里的 @', stripMention('/AI 说 <@123> 是谁'), '/AI 说 <@123> 是谁');
+eq('AI 空格正文触发', parseAiPrefix('AI 你好'), '你好');
+eq('AI 无空格不触发', parseAiPrefix('AI你好'), null);
+eq('正文中间 AI 不触发', parseAiPrefix('你看这个AI'), null);
+eq('命令必须从开头', parseCommand('尝试用/帮助').name, '');
+eq('帮助命令识别', parseCommand('/帮助').name, 'help');
+eq('帮助带参数仍识别为 help', parseCommand('/帮助 好垃圾').name, 'help');
+ok('帮助属于无参数命令', NO_ARG_COMMANDS.has('help'));
 
 // ---------- 计算与编码 ----------
 eq('calc 四则', formatNumber(calc('(17*23+5)/4')), '99');
@@ -296,7 +304,7 @@ function fakeCore() {
     queue: [],
     reconnect: 0,
     enqueue(t) { this.queue.push(t); return { ok: true }; },
-    async cfg() { return { appId: '100', appSecret: 'x', intents: 33554432 }; },
+    async cfg() { return { appId: '100', appSecret: 'x', intents: 100663296 }; },
     async getToken() { return 'tok123'; },
     scheduleReconnect(ms) { this.reconnect = ms; },
     async onJoin() {},
@@ -311,7 +319,7 @@ function fakeCore() {
   const id = core.sent.find((f) => f.op === 2);
   ok('HELLO 后发了 Identify', !!id);
   eq('Identify token 带 QQBot 前缀', id?.d?.token, 'QQBot tok123');
-  eq('Identify 带 intents', id?.d?.intents, 33554432);
+  eq('Identify 带 intents', id?.d?.intents, 100663296);
   wsClose(core);
   ok('关闭后状态是 stopped', core.wsState === 'stopped');
 }

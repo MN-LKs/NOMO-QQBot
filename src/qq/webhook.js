@@ -77,6 +77,9 @@ export function normaliseEvent(payload) {
       convId: isC2C ? `u:${openId}` : `g:${groupId}`,
       targetId: isC2C ? openId : groupId,
       messageId: d.id,
+      // 普通消息用 msg_id 被动回复;event_id 只给 INTERACTION_CREATE 用,
+      // 否则被动回复会退化成主动消息(丢了 msg_id)。
+      eventId: '',
       userId: isC2C ? openId : userId,
       nickname: d.author?.nickname || d.author?.username || '',
       memberRole: d.author?.member_role || '',
@@ -115,6 +118,26 @@ export function normaliseEvent(payload) {
       userId: d.openid,
       nickname: '',
       text: '/菜单',
+    };
+  }
+
+  if (t === 'INTERACTION_CREATE') {
+    const r = d.data?.resolved || {};
+    const groupOpenid = d.group_openid || r.group_openid || d.data?.group_openid || '';
+    const userOpenid = r.user_id || d.user_openid || '';
+    return {
+      ...base,
+      kind: 'interaction',
+      scene: groupOpenid ? 'group' : 'c2c',
+      eventId: payload.id,
+      interactionId: d.id,
+      targetId: groupOpenid || userOpenid,
+      convId: groupOpenid ? `g:${groupOpenid}` : `u:${userOpenid}`,
+      userId: userOpenid,
+      groupOpenid,
+      buttonData: String(r.button_data || ''),
+      buttonId: String(r.button_id || ''),
+      chatType: d.chat_type,
     };
   }
 
@@ -174,6 +197,16 @@ export async function handleWebhook(request, cfg, env) {
 
   const task = normaliseEvent(payload);
 
+  if (task.kind === 'interaction') {
+    try {
+      await enqueueTask(env, task);
+      return new Response(OK_BODY, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    } catch (e) {
+      console.error('[互动入队失败]', e?.stack || e);
+      return jsonRes({ error: 'enqueue failed' }, 500);
+    }
+  }
+
   if (task.kind !== 'message') {
     if (task.kind === 'note') {
       console.log(`[事件] ${task.type} 已收到(无需回复)`);
@@ -184,8 +217,20 @@ export async function handleWebhook(request, cfg, env) {
     return new Response(OK_BODY, { status: 200, headers: { 'Content-Type': 'application/json' } });
   }
 
+  const enqueue = enqueueTask(env, task);
+
+  try {
+    await Promise.race([enqueue, sleep(4000)]);
+    return new Response(OK_BODY, { status: 200, headers: { 'Content-Type': 'application/json' } });
+  } catch (e) {
+    console.error('[入队失败]', e?.stack || e);
+    return jsonRes({ error: 'enqueue failed' }, 500);
+  }
+}
+
+function enqueueTask(env, task) {
   const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
-  const enqueue = stub.fetch('https://do/enqueue', {
+  return stub.fetch('https://do/enqueue', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(task),
@@ -197,14 +242,6 @@ export async function handleWebhook(request, cfg, env) {
     console.error('[入队失败]', e?.stack || e);
     throw e;
   });
-
-  try {
-    await Promise.race([enqueue, sleep(4000)]);
-    return new Response(OK_BODY, { status: 200, headers: { 'Content-Type': 'application/json' } });
-  } catch (e) {
-    console.error('[入队失败]', e?.stack || e);
-    return jsonRes({ error: 'enqueue failed' }, 500);
-  }
 }
 
 function sleep(ms) {

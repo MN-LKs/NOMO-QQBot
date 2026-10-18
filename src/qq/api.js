@@ -54,28 +54,34 @@ async function post(cfg, token, path, body) {
 
 export function sendGroupMessage(cfg, token, o) {
   const body = { msg_type: 0, content: String(o.content) };
-  if (o.msgId) body.msg_id = o.msgId;
+  if (o.eventId) body.event_id = o.eventId;
+  else if (o.msgId) body.msg_id = o.msgId;
   if (o.msgSeq !== undefined) body.msg_seq = o.msgSeq;
   return post(cfg, token, `/v2/groups/${encodeURIComponent(o.groupOpenid)}/messages`, body);
 }
 
 export function sendGroupMarkdown(cfg, token, o) {
   const body = { msg_type: 2, markdown: { content: String(o.content) } };
-  if (o.msgId) body.msg_id = o.msgId;
+  if (o.keyboard) body.keyboard = o.keyboard;
+  if (o.eventId) body.event_id = o.eventId;
+  else if (o.msgId) body.msg_id = o.msgId;
   if (o.msgSeq !== undefined) body.msg_seq = o.msgSeq;
   return post(cfg, token, `/v2/groups/${encodeURIComponent(o.groupOpenid)}/messages`, body);
 }
 
 export function sendC2CMessage(cfg, token, o) {
   const body = { msg_type: 0, content: String(o.content) };
-  if (o.msgId) body.msg_id = o.msgId;
+  if (o.eventId) body.event_id = o.eventId;
+  else if (o.msgId) body.msg_id = o.msgId;
   if (o.msgSeq !== undefined) body.msg_seq = o.msgSeq;
   return post(cfg, token, `/v2/users/${encodeURIComponent(o.openid)}/messages`, body);
 }
 
 export function sendC2CMarkdown(cfg, token, o) {
   const body = { msg_type: 2, markdown: { content: String(o.content) } };
-  if (o.msgId) body.msg_id = o.msgId;
+  if (o.keyboard) body.keyboard = o.keyboard;
+  if (o.eventId) body.event_id = o.eventId;
+  else if (o.msgId) body.msg_id = o.msgId;
   if (o.msgSeq !== undefined) body.msg_seq = o.msgSeq;
   return post(cfg, token, `/v2/users/${encodeURIComponent(o.openid)}/messages`, body);
 }
@@ -121,7 +127,7 @@ export function explainError(data) {
   return `${code} ${map[code] || data?.message || ''}`.trim();
 }
 
-function sendOne(cfg, token, target, content, { mode, msgId, msgSeq, markdown = false }) {
+function sendOne(cfg, token, target, content, { mode, msgId, msgSeq, eventId, markdown = false }) {
   if (mode === 'active') {
     if (markdown) {
       return target.kind === 'group'
@@ -134,16 +140,16 @@ function sendOne(cfg, token, target, content, { mode, msgId, msgSeq, markdown = 
   }
   if (markdown) {
     return target.kind === 'group'
-      ? sendGroupMarkdown(cfg, token, { groupOpenid: target.id, content, msgId, msgSeq })
-      : sendC2CMarkdown(cfg, token, { openid: target.id, content, msgId, msgSeq });
+      ? sendGroupMarkdown(cfg, token, { groupOpenid: target.id, content, msgId, msgSeq, eventId })
+      : sendC2CMarkdown(cfg, token, { openid: target.id, content, msgId, msgSeq, eventId });
   }
   return target.kind === 'group'
-    ? sendGroupMessage(cfg, token, { groupOpenid: target.id, content, msgId, msgSeq })
-    : sendC2CMessage(cfg, token, { openid: target.id, content, msgId, msgSeq });
+    ? sendGroupMessage(cfg, token, { groupOpenid: target.id, content, msgId, msgSeq, eventId })
+    : sendC2CMessage(cfg, token, { openid: target.id, content, msgId, msgSeq, eventId });
 }
 
 export async function deliver(cfg, token, target, opts = {}) {
-  const { chunks, chunkSize = 800, msgId } = opts;
+  const { chunks, chunkSize = 800, msgId, eventId } = opts;
   const mode = opts.mode === 'active' ? 'active' : 'passive';
   const sent = [];
   const errors = [];
@@ -153,19 +159,19 @@ export async function deliver(cfg, token, target, opts = {}) {
     let content = raw;
     let r;
     if (opts.markdown) {
-      r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq, markdown: true });
+      r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq, eventId, markdown: true });
       if (!r.ok) {
         errors.push('Markdown 发送失败,已退回纯文本');
-        r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq });
+        r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq, eventId });
       }
     } else {
-      r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq });
+      r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq, eventId });
     }
 
     if (!r.ok && r.data?.code === ERR_URL_FORBIDDEN) {
       const stripped = content.replace(/https?:\/\//g, '');
       if (stripped !== content) {
-        const r2 = await sendOne(cfg, token, target, stripped, { mode, msgId, msgSeq: seq });
+        const r2 = await sendOne(cfg, token, target, stripped, { mode, msgId, msgSeq: seq, eventId });
         if (r2.ok) {
           sent.push(stripped);
           errors.push('URL 被拦截,已去掉 https:// 后发出');
@@ -180,7 +186,7 @@ export async function deliver(cfg, token, target, opts = {}) {
       const half = Math.max(50, chunkSize >> 1);
       let allOk = true;
       for (const piece of chunkRaw(content, half)) {
-        const r3 = await sendOne(cfg, token, target, piece, { mode, msgId, msgSeq: seq });
+        const r3 = await sendOne(cfg, token, target, piece, { mode, msgId, msgSeq: seq, eventId });
         seq++;
         if (r3.ok) sent.push(piece);
         else {
