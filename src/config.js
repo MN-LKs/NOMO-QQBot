@@ -125,6 +125,15 @@ export const DEFAULT_SETTINGS = {
     timeoutMs: 8000,
   },
   site: { publicBaseUrl: '' },
+  // 万能模型层:主对话模型之外的 OCR / ASR / TTS / 图像生成 / 摘要压缩。
+  // 每一类都是独立的 baseUrl + apiKey + model + protocol,可以指向不同服务商。
+  models: {
+    ocr: { enabled: false, baseUrl: '', apiKey: '', model: '', protocol: 'chat', prompt: '', extra: {} },
+    asr: { enabled: false, baseUrl: '', apiKey: '', model: '', protocol: 'chat', prompt: '', extra: {} },
+    tts: { enabled: false, baseUrl: '', apiKey: '', model: '', protocol: 'chat', prompt: '', extra: {} },
+    imageGen: { enabled: false, baseUrl: '', apiKey: '', model: '', protocol: 'chat', prompt: '', extra: {} },
+    compress: { enabled: false, baseUrl: '', apiKey: '', model: '', protocol: 'chat', prompt: '', extra: {} },
+  },
 };
 
 function str(env, key) {
@@ -213,10 +222,11 @@ export function normalizeApiBase(raw) {
 }
 
 /**
- * 从一个「带 /v1 的 url」推导出搜索与网页读取两个端点。
- * 例:https://api.x.com/v1 -> search=https://api.x.com/v1/search, reader=https://api.x.com/v1/reader
- * 如果用户直接填了带 /search 或 /reader 后缀的地址,就按填的来。
+ * 万能模型层(OCR / ASR / TTS / 图像生成 / 摘要压缩)的配置加工。
+ * 真正的请求构造在 src/agent/models.js。
  */
+export { MODEL_KINDS, KIND_META, PROTOCOLS, DEFAULT_MODEL } from './agent/models.js';
+import { normaliseModels, modelReady } from './agent/models.js';
 export function deriveEndpoints(baseUrl, searchPath = '/search', readerPath = '/reader') {
   let base = trimSlash(normalizeBaseUrl(baseUrl));
   let sp = String(searchPath || '/search').trim() || '/search';
@@ -314,6 +324,13 @@ export function flatten(settings, env = {}) {
     motdImageApi: String(settings.motd?.imageApi || '').trim(),
     motdImageEnabled: settings.motd?.imageEnabled === true,
     motdTimeoutMs: Math.max(2000, Math.min(30000, Number(settings.motd?.timeoutMs) || 8000)),
+    // 万能模型层:models 是加工后的五类模型配置(缺字段补默认、脏字段清掉)
+    models: normaliseModels(settings.models),
+    modelOcrReady: modelReady(normaliseModels(settings.models).ocr),
+    modelAsrReady: modelReady(normaliseModels(settings.models).asr),
+    modelTtsReady: modelReady(normaliseModels(settings.models).tts),
+    modelImageReady: modelReady(normaliseModels(settings.models).imageGen),
+    modelCompressReady: modelReady(normaliseModels(settings.models).compress),
     maxSites: Number(dep.maxProjects) || 5,
     idLen: FIXED.idLen,
     idCharset: FIXED.idCharset,

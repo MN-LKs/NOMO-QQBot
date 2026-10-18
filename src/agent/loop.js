@@ -5,7 +5,9 @@ import { buildSystemPrompt } from './prompt.js';
 import { truncate, clipMiddle } from '../util/text.js';
 import { mcpToolDefs, callMcp } from './mcp.js';
 import { listSkills, pickSkills } from './skills.js';
-import { loadExts, enabledToolSet, externalToolDefs, runExternalTool } from './exts.js';
+import { loadExts, enabledToolSet, externalToolDefs, runExternalTool, scriptDefs } from './exts.js';
+import { buildRegistry, runScriptTool } from './registry.js';
+import { execBackend, sandboxFetch } from '../core/backend.js';
 import { listModules, agentModules, siteModules } from '../store/modules.js';
 
 export async function runAgent({ cfg, core, convId, userText, images = [], meta = {}, log = console.log }) {
@@ -34,12 +36,14 @@ export async function runAgent({ cfg, core, convId, userText, images = [], meta 
   let extTools = { defs: [], map: new Map() };
   let modules = [];
   let prefabList = [];
+  let extState = { builtin: [], external: [] };
   try {
-    const [skillRows, extState, moduleRows] = await Promise.all([
+    const [skillRows, exts, moduleRows] = await Promise.all([
       listSkills(core.env, { enabledOnly: true }),
       loadExts(core.env),
       listModules(core.env, { enabledOnly: true }),
     ]);
+    extState = exts;
     skills = pickSkills(skillRows, userText, cfg.skillMaxInject || 6000);
     toolSet = enabledToolSet(extState);
     extTools = externalToolDefs(extState);
@@ -49,8 +53,39 @@ export async function runAgent({ cfg, core, convId, userText, images = [], meta 
     /* 加载失败:用默认值 */
   }
 
-  const tools = [...buildTools(cfg, { toolSet, modules, prefabList, externalDefs: extTools.defs }), ...mcp.defs];
-  const ctx = { cfg, core, convId, meta, modules: new Map(modules.map((m) => [m.id, m])), log };
+  // 创造模式(仅管理员的单轮上帝权限):架构限制、扩展开关、审批全部放开。
+  // 只在本次 runAgent 内生效,不改写数据库里的设置,下一轮自动恢复正常。
+  const creative = meta?.creative === true;
+  const creativeCfg = creative
+    ? { ...cfg, architectures: ['html', 'prefab', 'custom'], canDeploy: true, canPrefab: true, canCustomBackend: true, deployConfirm: false }
+    : cfg;
+
+  const scriptTools = scriptDefs(extState);
+  const tools = [
+    ...buildTools(creativeCfg, {
+      toolSet: creative ? null : toolSet,
+      modules, prefabList, externalDefs: [...extTools.defs, ...scriptTools.defs],
+      creative,
+    }),
+    ...mcp.defs,
+  ];
+  // 统一工具注册表:面板「工具总览」与调试日志都用这一份
+  const registry = buildRegistry({
+    execDefs: tools,
+    toolSet,
+    exts: extState,
+    mcp,
+  });
+  const ctx = {
+    cfg: creativeCfg, core, convId, meta, modules: new Map(modules.map((m) => [m.id, m])), log, creative,
+    registry,
+    scriptTools,
+    runSandbox: execBackend,
+    sandboxFetch,
+    // 本轮产生的富媒体产物(图片/语音)。工具往里 push,由 BotCore 负责投递。
+    // 这样 loop 本身不碰 QQ 发送逻辑,换成别的客户端也能复用。
+    media: [],
+  };
 
   const conv = await core.getContext(convId);
   const messages = [{ role: 'system', content: buildSystemPrompt(cfg, { ...meta, skills, prefabList }) }];
@@ -137,9 +172,11 @@ export async function runAgent({ cfg, core, convId, userText, images = [], meta 
       }
       const m = mcp.map.get(name);
       const em = extTools.map.get(name);
+      const sm = ctx.scriptTools?.map?.get(name);
       let result;
       if (m) result = await callMcp(core.env, m.serverId, m.tool, args);
       else if (em) result = await runExternalTool(em, args, (msg) => log(`[扩展] ${msg}`));
+      else if (sm) result = await runScriptTool(sm, args, ctx);
       else result = await executeTool(name, args, ctx);
       return { name, args, result: String(result) };
     }));
@@ -183,6 +220,9 @@ export async function runAgent({ cfg, core, convId, userText, images = [], meta 
     }
   }
 
+  const generatedImages = ctx.media.filter((m) => m.kind === 'image');
+  const generatedVoices = ctx.media.filter((m) => m.kind === 'voice');
+
   return {
     reply: final,
     toolTrace,
@@ -192,5 +232,7 @@ export async function runAgent({ cfg, core, convId, userText, images = [], meta 
     elapsedMs: Date.now() - started,
     historyUser: userText,
     historyAssistant: final,
+    generatedImages,
+    generatedVoices,
   };
 }

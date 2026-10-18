@@ -420,10 +420,11 @@ function showUpdateInfo(r){
  if(r.latestMessage)lines.push('<div class="small" style="margin-top:6px">'+h(r.latestMessage)+'</div>');
  if(r.note)lines.push('<div class="small" style="color:#b45309;margin-top:6px">'+h(r.note)+'</div>');
  lines.push('<div class="hint" style="margin-top:10px">'+(r.updateAvailable?'发现新版本。配置 Cloudflare Deploy Hook 后可以一键触发构建;没有配置就去 GitHub 手动推送。':'当前已是最新版本。')+'</div>');
- var footer='<button class="btn" data-x>关闭</button>'+(r.updateAvailable?'<button class="btn pri" data-upd>立即更新</button>':'');
+ var canUpd=!!(r.updateAvailable||r.emergency||r.force);
+  var footer='<button class="btn" data-x>关闭</button>'+(canUpd?'<button class="btn pri" data-upd>立即更新</button>':'');
  var m=modal('检查更新',lines.join(''),footer);
  m.querySelector('[data-x]').onclick=function(){m.remove()};
- if(r.updateAvailable)m.querySelector('[data-upd]').onclick=function(){var b=this;b.disabled=true;b.textContent='触发中…';
+ if(canUpd)m.querySelector('[data-upd]').onclick=function(){var b=this;b.disabled=true;b.textContent='触发中…';
   api('/update/deploy',{method:'POST'}).then(function(x){toast(x.note||'已触发部署');m.remove()})
    .catch(function(e){toast(e.message);b.disabled=false;b.textContent='立即更新'})};
 }
@@ -431,6 +432,7 @@ var NAV=[
  ['home','首页','M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z'],
  ['homepage','首页配置','M4 5h16v14H4zM4 9h16'],
  ['agent','Agent 配置','M12 3a4 4 0 0 1 4 4c0 1.1-.5 2.1-1.2 2.8A6 6 0 0 1 18 15v3H6v-3a6 6 0 0 1 3.2-5.2A4 4 0 0 1 12 3zM9 21h6'],
+ ['models','模型','M12 2 3 7v10l9 5 9-5V7zM12 22V12M3 7l9 5 9-5'],
  ['ext','扩展管理','M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z'],
  ['projects','部署项目','M3 5h7l2 2h9v12H3zM3 11h18'],
  ['storage','存储','M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
@@ -481,6 +483,7 @@ function render(force){
  if(r[0]==='home')return pageHome();
  if(r[0]==='homepage')return pageHomepageConfig();
  if(r[0]==='agent')return pageAgent();
+ if(r[0]==='models')return pageModels();
  if(r[0]==='ext')return pageExtHub();
  if(r[0]==='mcp')return pageMcp();
  if(r[0]==='skills')return pageSkills();
@@ -890,6 +893,106 @@ function loadAgentTools(v){
    api('/exts/toggle',{method:'POST',body:{id:n.dataset.agtool,enabled:!n.classList.contains('on')}})
     .then(function(){n.classList.toggle('on');toast('已更新')}).catch(function(e){toast(e.message)})}});
  }).catch(function(e){var box=v.querySelector('#ag-tools');if(box)box.innerHTML='<div class="empty">'+h(e.message)+'</div>'});
+}
+function pageModels(){
+ setTitle('模型');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ loadSettings(true).then(function(d){
+  var m=(d.settings.models)||{},llm=d.settings.llm||{};
+  var KINDS=[['ocr','图片识别 OCR','把图片里的文字提取成文本。配好之后,群里发图片不用开原生视觉 AI 也能"读懂"字。'],
+   ['asr','语音识别 ASR','把语音消息转成文字再接进对话。需要接口支持音频输入。'],
+   ['tts','语音合成 TTS','把回复念成语音,通过 QQ 语音消息发出去。'],
+   ['imageGen','图像生成','按描述生成图片,通过 QQ 图片消息发出去。配好后 AI 会多一个 draw_image 工具。'],
+   ['compress','摘要压缩','对话太长时压成摘要,省上下文。不配就用主对话模型压。']];
+  var PROTOS=[['chat',' 兼容(/chat/completions)'],
+   ['responses','Responses API(/responses)'],
+   ['google','Google(/models/x:generateContent)'],
+   ['claude',' 兼容(/v1/messages)']];
+  var html='<div class="card"><h3>万能模型层</h3><div class="sub">主对话模型之外,再配几类专用模型。每一类都独立配地址、Key、模型名和协议,可以指向不同服务商;哪一类没配,对应功能自动关掉,不影响其它功能。</div>';
+  html+='<div class="hint" style="margin-bottom:12px">主对话模型在「Agent 配置」页设置,这里只配辅助模型。密钥输入框<b>留空表示不修改</b>,保存后显示的是打码值。</div>';
+  KINDS.forEach(function(k){
+   var x=m[k[0]]||{};
+   var id='md-'+k[0];
+   var reuse=(!x.baseUrl&&llm.baseUrl)?'<span class="tag ok">复用主接口</span>':'';
+   html+='<div class="card" style="box-shadow:none;margin-bottom:12px"><h3>'+h(k[1])+' '+reuse+'</h3><div class="sub">'+h(k[2])+'</div>'+
+    '<div class="line"><div class="g"><b>启用</b><span>关掉后这一类的调用会直接跳过</span></div>'+sw(x.enabled===true,'data-t="'+id+'-on"')+'</div>'+
+    '<div class="row"><div><label class="f">接口地址</label><input class="t mono" id="'+id+'-url" value="'+h(x.baseUrl||'')+'" placeholder="留空则复用主接口地址"></div>'+
+    '<div><label class="f">模型名</label><input class="t mono" id="'+id+'-model" value="'+h(x.model||'')+'" placeholder="例如 qwen-vl-ocr / whisper-1"></div></div>'+
+    '<div class="row" style="margin-top:8px"><div><label class="f">API Key</label><input class="t mono" id="'+id+'-key" value="" placeholder="'+(x.apiKey?'已保存 '+h(x.apiKey)+' · 留空不修改':'留空则复用主接口 Key')+'"></div>'+
+    '<div><label class="f">协议</label><select class="t" id="'+id+'-proto">'+PROTOS.map(function(p){
+     return '<option value="'+p[0]+'"'+(x.protocol===p[0]?' selected':'')+'>'+h(p[1])+'</option>'}).join('')+'</select></div></div>'+
+    '<div class="fld" style="margin-top:8px"><label class="f">附加提示词(可选)</label><input class="t" id="'+id+'-prompt" value="'+h(x.prompt||'')+'" placeholder="留空用内置提示词"></div>'+
+    '<div style="display:flex;gap:10px;margin-top:10px;align-items:center">'+
+     '<button class="btn pri" data-msave="'+k[0]+'">保存这一类</button>'+
+     '<button class="btn" data-mtest="'+k[0]+'">测试</button>'+
+     '<span class="small dim" id="'+id+'-st"></span></div></div>';
+  });
+  html+='</div>';
+  v.innerHTML=html;
+
+  function savePatch(patch,btn){
+   if(btn){btn.disabled=true;btn.textContent='保存中…'}
+   api('/settings',{method:'POST',body:{models:patch}}).then(function(r){toast(r.note||'已保存');S.settings=null})
+    .catch(function(e){toast(e.message)})
+    .then(function(){if(btn){btn.disabled=false;btn.textContent='保存这一类'}});
+  }
+  function readKind(kind){
+   var id='md-'+kind;
+   var key=v.querySelector('#'+id+'-key').value.trim();
+   var o={
+    enabled:v.querySelector(selAttr(id+'-on')).classList.contains('on'),
+    baseUrl:v.querySelector('#'+id+'-url').value.trim(),
+    model:v.querySelector('#'+id+'-model').value.trim(),
+    protocol:v.querySelector('#'+id+'-proto').value,
+    prompt:v.querySelector('#'+id+'-prompt').value,
+    extra:{},
+   };
+   if(key)o.apiKey=key;
+   var out={};out[kind]=o;return out;
+  }
+  KINDS.forEach(function(k){
+   var id='md-'+k[0];
+   bindTog(v,id+'-on',function(on){var o={};o[k[0]]={enabled:on};return {models:o}},function(patch){savePatch(patch,null)});
+  });
+  v.querySelectorAll('[data-msave]').forEach(function(b){
+   b.onclick=function(){savePatch(readKind(b.getAttribute('data-msave')),this)};
+  });
+  v.querySelectorAll('[data-mtest]').forEach(function(b){
+   b.onclick=function(){openModelTest(b.getAttribute('data-mtest'))};
+  });
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+// 模型测试弹窗:按模型类型给不同输入表单,结果直接预览(文字/图片/音频)
+function openModelTest(kind){
+ var T={
+  ocr:{title:'测试图片识别',fields:[['img','图片地址','https://… 或 data:image/png;base64,…']],btn:'识别'},
+  asr:{title:'测试语音识别',fields:[['audio','音频地址','https://… (wav / mp3)']],btn:'识别'},
+  tts:{title:'测试语音合成',fields:[['text','要念的文字','你好,这是一段测试语音']],btn:'合成'},
+  imageGen:{title:'测试图像生成',fields:[['prompt','要画的内容','一只戴墨镜的橘猫在冲浪'],['size','尺寸','1024x1024']],btn:'生成'},
+  compress:{title:'测试摘要压缩',fields:[['text','要压缩的长文本','粘贴一段长对话']],btn:'压缩'},
+ }[kind]||{title:'测试',fields:[['text','输入','']],btn:'测试'};
+ var body='<div class="hint" style="margin-bottom:10px">用当前已保存的配置调用;改过配置请先点「保存这一类」。</div>';
+ T.fields.forEach(function(f){
+  body+='<div class="fld"><label class="f">'+h(f[1])+'</label><input class="t" id="mt-'+f[0]+'" placeholder="'+h(f[2])+'"></div>';
+ });
+ body+='<div id="mt-out" class="hint" style="margin-top:10px"></div>';
+ var m=modal(T.title,body,'<button class="btn pri" id="mt-go">'+h(T.btn)+'</button> <button class="btn" data-x>关闭</button>');
+ m.querySelector('[data-x]').onclick=function(){m.remove()};
+ m.querySelector('#mt-go').onclick=function(){
+  var b=this;b.disabled=true;b.textContent='请求中…';
+  var out=m.querySelector('#mt-out');out.textContent='';
+  var args={kind:kind};
+  T.fields.forEach(function(f){args[f[0]]=m.querySelector('#mt-'+f[0]).value.trim()});
+  api('/test-model',{method:'POST',body:args}).then(function(r){
+   b.disabled=false;b.textContent=T.btn;
+   if(r.error){out.innerHTML='<b style="color:#b91c1c">失败:</b>'+h(r.error);return}
+   out.innerHTML='<b style="color:#15803d">成功</b> · 耗时 '+h(String(r.ms||0))+'ms'+
+    (r.text?'<pre class="code" style="margin-top:8px;max-height:220px;overflow:auto">'+h(r.text)+'</pre>':'')+
+    (r.imageData?'<img src="'+r.imageData+'" style="max-width:100%;margin-top:8px;border-radius:8px">':'')+
+    (r.audioData?'<audio controls src="'+r.audioData+'" style="width:100%;margin-top:8px"></audio>':'')+
+    (r.note?'<div class="small dim" style="margin-top:6px">'+h(r.note)+'</div>':'');
+  }).catch(function(e){b.disabled=false;b.textContent=T.btn;out.innerHTML='<b style="color:#b91c1c">失败:</b>'+h(e.message)});
+ };
 }
 function pageSettings(){
  setTitle('设置');
@@ -1604,7 +1707,7 @@ function pageStorage(){
   m.querySelector('[data-x]').onclick=function(){m.remove()};
  },400);
  if(ME.checkUpdates)setTimeout(function(){
-  api('/update/check').then(function(r){if(r&&(r.updateAvailable||r.force))showUpdateInfo(r)}).catch(function(){});
+  api('/update/check').then(function(r){if(r&&(r.updateAvailable||r.force||r.emergency))showUpdateInfo(r)}).catch(function(){});
  },2500);
 })();
 </script>

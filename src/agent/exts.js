@@ -81,9 +81,39 @@ export async function removeExt(env, id) {
   await env.DB.prepare('DELETE FROM exts WHERE id = ?').bind(String(id)).run();
 }
 
+// 自写工具(kind='script' 的扩展)的工具定义与查找表。
+// 一条扩展里可以放多个工具,共享一个 id 前缀,方便管理员/AI 成组创建。
+export function scriptDefs(exts) {
+  const defs = [];
+  const map = new Map();
+  for (const e of exts?.external || []) {
+    if (e.kind !== 'script') continue;
+    for (const t of Array.isArray(e.config?.tools) ? e.config.tools : []) {
+      if (!t || !t.name || !String(t.code || '').trim()) continue;
+      const name = safeToolName(e.id, t.name);
+      const props = {};
+      const required = [];
+      const p = t.parameters && typeof t.parameters === 'object' ? t.parameters : {};
+      for (const [k, v] of Object.entries(p.properties || {})) {
+        props[k] = { type: v?.type || 'string', description: String(v?.description || '') };
+        if (v?.required || (p.required || []).includes(k)) required.push(k);
+      }
+      defs.push({
+        type: 'function',
+        function: {
+          name,
+          description: `[自写工具/${e.name}] ${String(t.description || '').slice(0, 600)}`,
+          parameters: { type: 'object', properties: props, required },
+        },
+      });
+      map.set(name, { ext: e, tool: t });
+    }
+  }
+  return { defs, map };
+}
+
 // 所有处于开启状态的内置工具名
-export function enabledToolSet(exts) {
-  const set = new Set();
+export function enabledToolSet(exts) {  const set = new Set();
   for (const b of exts?.builtin || []) {
     if (!b.enabled) continue;
     for (const t of b.tools) set.add(t);

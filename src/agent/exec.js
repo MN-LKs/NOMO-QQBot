@@ -3,6 +3,9 @@ import { htmlToText } from '../util/html.js';
 import { truncate } from '../util/text.js';
 import { webSearch, readPage } from './search.js';
 import { parseMotdTarget, queryMotd, formatMotdText } from './motd.js';
+import { generateImage } from './models.js';
+import { saveExt, loadExts, safeToolName } from './exts.js';
+import { invalidate as invalidateSettings } from '../store/settings.js';
 import { execBackend, moduleResultText, sandboxFetch } from '../core/backend.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
@@ -280,6 +283,87 @@ export async function executeTool(name, args, ctx) {
         const off = Number.isFinite(Number(a.offset_hours)) ? Number(a.offset_hours) : 8;
         const t = fmtTime(new Date(), off);
         return `现在是 ${t.text}(${t.tz}),ISO: ${t.iso}`;
+      }
+
+      case 'draw_image': {
+        if (!ctx.cfg.modelImageReady) {
+          return '图像生成模型还没有配置。请管理员到面板「模型」页填写图像生成的接口地址、Key 和模型名。';
+        }
+        const prompt = String(a.prompt || '').trim();
+        if (!prompt) return '缺少要画的描述(prompt)。';
+        try {
+          const r = await generateImage(ctx.cfg.models.imageGen, prompt, {
+            size: a.size, timeoutMs: 60000,
+          });
+          ctx.media.push({ kind: 'image', bytes: r.bytes, contentType: r.contentType, prompt });
+          return `图片已经生成并会随这条回复一起发出(描述:${prompt};大小 ${Math.round(r.bytes.length / 1024)}KB)。`
+            + '请再用一句话向用户描述你画了什么,不要重复描述技术细节。';
+        } catch (e) {
+          return `图像生成失败:${e?.message || e}`;
+        }
+      }
+
+      case 'create_tool': {
+        // AI 自写工具:生成一条 kind='script' 的扩展,下一条消息起就能被调用。
+        // 只允许管理员(由调用方在 loop 里判断 creative),避免群里任何人都会写工具。
+        const name = String(a.name || '').trim();
+        const code = String(a.code || '');
+        if (!/^[A-Za-z0-9_-]{2,32}$/.test(name)) {
+          return '工具名只能用 2-32 位字母、数字、下划线或短横线。';
+        }
+        if (!code.trim()) return '缺少工具代码(code)。';
+        if (code.length > 20000) return '代码超过 20000 字上限。';
+        let params = a.parameters;
+        if (typeof params === 'string') {
+          try {
+            params = JSON.parse(params);
+          } catch {
+            return 'parameters 不是合法 JSON。';
+          }
+        }
+        if (params && typeof params === 'object' && !params.properties) {
+          return 'parameters 需要 JSON Schema 格式:{type:"object", properties:{...}, required:[...]}';
+        }
+        const extId = `ai_${String(a.group || 'tools').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 16)}`;
+        const desc = String(a.description || 'AI 自写工具').slice(0, 300);
+        try {
+          await saveExt(ctx.core.env, {
+            id: extId,
+            kind: 'script',
+            name: String(a.group_name || `AI 工具组 ${a.group || 'tools'}`).slice(0, 60),
+            description: '由 AI 在对话中创建的工具组,保存后立即生效',
+            enabled: true,
+            config: {
+              tools: [{
+                name,
+                description: desc,
+                parameters: params && typeof params === 'object' ? params : { type: 'object', properties: {} },
+                code,
+                timeoutMs: Math.max(1000, Math.min(20000, Number(a.timeoutMs) || 8000)),
+              }],
+            },
+          });
+          invalidateSettings();
+          return `工具已创建:x_${extId.slice(0, 10)}_${name}。`
+            + '注意它要到下一条消息才能被你调用(工具清单在每轮开始时确定),'
+            + '但从那之后的所有对话都能用它。'
+            + `这个工具的用途:${desc}`;
+        } catch (e) {
+          return `创建工具失败:${e?.message || e}`;
+        }
+      }
+
+      case 'list_tools': {
+        const ext = await loadExts(ctx.core.env);
+        const mine = ext.external.filter((e) => e.kind === 'script');
+        if (!mine.length) return '还没有 AI 自写工具。';
+        const rows = [];
+        for (const e of mine) {
+          for (const t of Array.isArray(e.config?.tools) ? e.config.tools : []) {
+            rows.push(`· ${safeToolName(e.id, t.name)} — ${String(t.description || '').slice(0, 80)}`);
+          }
+        }
+        return `已创建的 AI 工具 ${rows.length} 个(保存后即时生效):\n${rows.join('\n')}`;
       }
 
       case 'motd': {

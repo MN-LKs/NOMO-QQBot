@@ -9,6 +9,7 @@ import { chunkText, sealFenceChunks, stripMention, toPlainText, truncate } from 
 import { enhanceFiles } from '../util/seo.js';
 import { fetchAccessToken, deliver, deliverMedia, muteGroupMember, unmuteGroupMember, explainError, sendGroupMarkdown, sendC2CMarkdown } from '../qq/api.js';
 import { runAgent } from '../agent/loop.js';
+import { ocrImage, asrAudio, ttsSpeech, compressText, audioContentType } from '../agent/models.js';
 import { buildCompressPrompt, buildHelpText, buildHelpMarkdown, buildMenuText } from '../agent/prompt.js';
 import { chatWithFallback } from '../agent/llm.js';
 import { parseMotdTarget, queryMotd, formatMotdText, fetchMotdImage } from '../agent/motd.js';
@@ -24,6 +25,20 @@ const EVENT_TTL_MS = 10 * 60 * 1000;
 const JOB_STALE_MS = 10 * 60 * 1000;
 const SANDBOX_MAX_FILE = 200000;
 const SANDBOX_MAX_TOTAL = 2 * 1024 * 1024;
+
+// 从附件信息和文件头猜音频格式。QQ 语音常见 amr / silk,其它走 wav。
+function guessAudioFormat(a, bytes) {
+  const ct = String(a?.content_type || '').toLowerCase();
+  if (ct.includes('amr')) return 'amr';
+  if (ct.includes('silk')) return 'silk';
+  if (ct.includes('mpeg') || ct.includes('mp3')) return 'mp3';
+  if (ct.includes('wav') || ct.includes('pcm')) return 'wav';
+  const u8 = bytes || new Uint8Array(0);
+  if (u8.length > 12 && u8[0] === 0x52 && u8[1] === 0x49 && u8[2] === 0x46 && u8[3] === 0x46) return 'wav';
+  if (u8.length > 3 && u8[0] === 0x23 && u8[1] === 0x21 && u8[2] === 0x41) return 'amr';
+  if (u8.length > 2 && u8[0] === 0xff && (u8[1] === 0xfb || u8[1] === 0xf3)) return 'mp3';
+  return 'wav';
+}
 
 export class BotCore {
   constructor(ctx, env) {
@@ -407,6 +422,19 @@ Object.assign(BotCore.prototype, {
       return;
     }
 
+    // 创造模式:AI 创造模式 <内容>。仅管理员,单轮上帝权限。
+    // 必须在 aiBody 之前判断,否则会被当成普通 AI 请求吃掉。
+    const creativeBody = (mentioned || p.scene === 'c2c') ? parseCreativeMode(text) : null;
+    if (creativeBody !== null) {
+      if (!this.isAdmin(cfg, p)) {
+        log(`[创造模式] 非管理员 ${p.userId} 尝试使用,已忽略`, 'warn');
+        return;
+      }
+      log(`[创造模式] 管理员 ${p.userId} 开启单轮上帝权限 :: ${truncate(creativeBody, 120)}`);
+      await this.runTurn(p, creativeBody, incoming, cfg, true);
+      return;
+    }
+
     // 触发正文:AI<空格>正文 / /AI<空格>正文;或被 @机器人 后直接说话。
     // 只 @了别人、或普通闲聊不发任何消息。
     let body = aiBody;
@@ -420,6 +448,14 @@ Object.assign(BotCore.prototype, {
       return;
     }
 
+    await this.runTurn(p, body, incoming, cfg, false);
+  },
+
+  // 一轮完整的 Agent 回合:可选输入(图片/语音)→ 跑 Agent → 投递(文字/语音/图片)→ 记账。
+  // creative=true 时单轮上帝权限:工具全开、审批一律免(由 loop/tools 侧读取)。
+  async runTurn(p, body, incoming, cfg, creative = false) {
+    const convId = p.convId;
+    const log = (m, lv = 'info') => logWrite(this.env, lv, 'chat', m);
     // 应急强制更新:管理员一键开启后,机器人停止服务,统一回升级提示。
     // 放在最前面,连 AI 配置检查都要让路 —— 这时候配置对不对都不重要了。
     if (cfg.forceUpdate) {
@@ -471,20 +507,69 @@ Object.assign(BotCore.prototype, {
         /* 群缓存读不到不影响主流程 */
       }
     }
+    // 图片:优先走 OCR 模型(不消耗主模型的视觉能力),原生视觉作为可选补充。
+    // 两者都没开时只把附件名称带进上下文。
     const images = [];
+    const ocrTexts = [];
+    const imageUrls = [];
+    for (const a of Array.isArray(p.attachments) ? p.attachments : []) {
+      if (attachmentKind(a) !== '图片' || !a.url) continue;
+      if (images.length + ocrTexts.length >= 2) break;
+      imageUrls.push(a.url);
+    }
+    if (cfg.modelOcrReady) {
+      for (const url of imageUrls) {
+        try {
+          const r = await ocrImage(cfg.models.ocr, url, { timeoutMs: 30000 });
+          const t = String(r.text || '').trim();
+          if (t) ocrTexts.push(t);
+          log(`[OCR] ${url.slice(0, 60)} -> ${t ? `${t.length}字` : '空'}`, t ? 'info' : 'warn');
+        } catch (e) {
+          log(`[OCR] 失败:${e?.message || e}`, 'warn');
+        }
+      }
+    }
     if (cfg.visionEnabled) {
-      for (const a of Array.isArray(p.attachments) ? p.attachments : []) {
-        if (attachmentKind(a) !== '图片' || !a.url) continue;
+      for (const url of imageUrls.slice(ocrTexts.length)) {
         if (images.length >= 2) break;
         try {
-          images.push(await imageToDataUrl(a.url, { timeoutMs: 15000, maxBytes: 4 * 1024 * 1024 }));
+          images.push(await imageToDataUrl(url, { timeoutMs: 15000, maxBytes: 4 * 1024 * 1024 }));
         } catch (e) {
           log(`[图片] 下载失败:${e?.message || e}`, 'warn');
         }
       }
-      if (images.length) log(`[图片] 已读取 ${images.length} 张,将随消息一起发给模型`);
-    } else if (incoming.attachments) {
-      log('[图片] 图片识别未开启,只把附件名称带进上下文', 'info');
+      if (images.length) log(`[图片] 已读取 ${images.length} 张,随消息一起发给模型`);
+    }
+    if (!ocrTexts.length && !images.length && incoming.attachments) {
+      log('[图片] 既没配 OCR 也没开原生视觉,只把附件名称带进上下文', 'info');
+    }
+
+    // 语音:走 ASR 模型转文字;没配或失败就在正文里说明,不让用户干等
+    let asrText = '';
+    const voices = (Array.isArray(p.attachments) ? p.attachments : [])
+      .filter((a) => attachmentKind(a) === '语音' && a.url);
+    if (voices.length && cfg.modelAsrReady) {
+      try {
+        const a = voices[0];
+        const res = await fetch(a.url, { headers: { 'User-Agent': UA } });
+        if (!res.ok) throw new Error(`语音下载失败 HTTP ${res.status}`);
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (buf.length > 8 * 1024 * 1024) throw new Error('语音太大(超过 8MB)');
+        const fmt = guessAudioFormat(a, buf);
+        const r = await asrAudio(cfg.models.asr, buf, fmt, { timeoutMs: 60000 });
+        asrText = String(r.text || '').trim();
+        log(`[ASR] 识别到 ${asrText.length} 字`, asrText ? 'info' : 'warn');
+      } catch (e) {
+        log(`[ASR] 失败:${e?.message || e}`, 'warn');
+      }
+    } else if (voices.length) {
+      log('[ASR] 没有配置语音识别模型,语音消息无法转文字', 'info');
+    }
+    if (asrText && !body) body = asrText;
+    else if (asrText) body = `${body}\n(用户发的语音转文字:${asrText})`;
+    if (ocrTexts.length && !body) body = '请看看我发的内容。';
+    if (ocrTexts.length) {
+      body += `\n(图片 OCR 识别到的文字:${ocrTexts.map((t) => `\n${t}`).join('')})`;
     }
 
     const result = await runAgent({
@@ -502,6 +587,7 @@ Object.assign(BotCore.prototype, {
         attachments: incoming.attachments,
         hasImage: images.length > 0,
         markdown: cfg.markdownEnabled,
+        creative: creative === true,
       },
       log,
     });
@@ -512,6 +598,38 @@ Object.assign(BotCore.prototype, {
     const answerMode = cfg.answerDelivery === 'active' ? 'active' : (overWindow() ? 'active' : 'passive');
     const delivered = await this.reply(p, outgoing, { mode: answerMode, markdown: cfg.markdownEnabled });
     log(`[投递] 方式=${delivered.mode} 条数=${delivered.sent.length}`);
+
+    // 语音合成:把正文念一遍(仅在配了 TTS 且正文不太长时)。
+    // 失败不影响已经发出去的文字,只记日志。
+    if (cfg.modelTtsReady && plain && plain.length <= 600) {
+      try {
+        const t0 = Date.now();
+        const r = await ttsSpeech(cfg.models.tts, plain);
+        const mr = await this.deliverRaw(p, r.bytes, {
+          fileType: 3,
+          fileName: `speech.${String(r.contentType || '').includes('amr') ? 'amr' : 'mp3'}`,
+          mode: delivered.mode,
+        });
+        log(`[TTS] ${r.bytes.length}B -> ${mr.ok ? '已发送' : '失败:' + mr.error} (${Date.now() - t0}ms)`, mr.ok ? 'info' : 'warn');
+      } catch (e) {
+        log(`[TTS] 失败:${e?.message || e}`, 'warn');
+      }
+    }
+
+    // 图像生成:Agent 只要 in-chat 生成了图,就以图片消息发出。
+    // 生成失败由工具本身回一句话说明,不在这里重试。
+    for (const gen of result.generatedImages || []) {
+      try {
+        const mr = await this.deliverRaw(p, gen.bytes, {
+          fileType: 1,
+          fileName: 'image.png',
+          mode: delivered.mode,
+        });
+        log(`[图像] ${gen.bytes.length}B -> ${mr.ok ? '已发送' : '失败:' + mr.error}`, mr.ok ? 'info' : 'warn');
+      } catch (e) {
+        log(`[图像] 发送失败:${e?.message || e}`, 'warn');
+      }
+    }
 
     this.appendMessages(convId, [
       { role: 'user', content: truncate([body, incoming.attachments, incoming.quote ? `[引用] ${incoming.quote}` : ''].filter(Boolean).join('\n'), 1500) },
@@ -530,6 +648,7 @@ Object.assign(BotCore.prototype, {
       ['tools', result.toolTrace.length || 0],
     ]).catch(() => null);
     log(`[完成] 轮次=${result.rounds} 工具=${result.toolTrace.length} token=${result.usageTotal} 耗时=${Date.now() - started}ms 降级=${result.downgraded}`);
+
   },
 
   isAdmin(cfg, p) {
@@ -576,6 +695,18 @@ Object.assign(BotCore.prototype, {
     const second = await this.deliverOnce(p, text, other, opts);
     await bump(this.env, `delivery_fallback_${other}`, 1).catch(() => null);
     return second;
+  },
+
+  // 把二进制(语音/图片)当富媒体发出去。走 deliverMedia → uploadMedia → sendMediaMessage。
+  async deliverRaw(p, bytes, opts = {}) {
+    const cfg = await this.cfg();
+    const token = await this.getToken();
+    const target = p.scene === 'c2c' ? { kind: 'c2c', id: p.targetId } : { kind: 'group', id: p.targetId };
+    return await deliverMedia(cfg, token, target, {
+      fileType: Number(opts.fileType) || 1,
+      bytes,
+      fileName: opts.fileName || '',
+    }, { mode: opts.mode || 'passive', msgId: p.messageId, msgSeq: this.nextSeq(p) });
   },
 
   async deliverOnce(p, text, mode = 'passive', opts = {}) {
@@ -652,11 +783,24 @@ Object.assign(BotCore.prototype, {
     const c = this.getContext(convId);
     if (c.messages.length < 4) return { ok: false, error: '消息太少,不需要压缩' };
     const text = c.messages.map((m) => `${m.role === 'user' ? '用户' : '助手'}:${truncate(m.content, 400)}`).join('\n');
-    const r = await chatWithFallback(cfg, [
-      { role: 'system', content: buildCompressPrompt() },
-      { role: 'user', content: text.slice(-8000) },
-    ], null, { timeoutMs: 60000 });
-    if (!r.content.trim()) return { ok: false, error: r.error || '模型没有返回摘要' };
+    let summary = '';
+    // 配了独立的压缩模型就优先用它(通常是便宜的小模型),否则退回主对话模型
+    if (cfg.modelCompressReady) {
+      try {
+        const r = await compressText(cfg.models.compress, text.slice(-8000));
+        summary = String(r.text || '').trim();
+      } catch (e) {
+        await logWrite(this.env, 'warn', 'compress', `压缩模型失败,退回主模型:${e?.message || e}`);
+      }
+    }
+    if (!summary) {
+      const r = await chatWithFallback(cfg, [
+        { role: 'system', content: buildCompressPrompt() },
+        { role: 'user', content: text.slice(-8000) },
+      ], null, { timeoutMs: 60000 });
+      summary = r.content.trim();
+    }
+    if (!summary) return { ok: false, error: '模型没有返回摘要' };
     this.setSummary(convId, r.content.trim().slice(0, 2000));
     this.sql.exec('DELETE FROM msg WHERE conv_id = ?', convId);
     return { ok: true, summary: r.content.trim(), kept: 0 };
@@ -1330,6 +1474,23 @@ export function parseCommand(text) {
 }
 
 export const NO_ARG_COMMANDS = new Set(['help', 'menu', 'status', 'memory', 'delete', 'compress', 'info']);
+
+/**
+ * 创造模式:仅管理员可用的单轮「上帝模式」。
+ * 触发:AI 创造模式 <内容>(AI 与「创造模式」之间只允许单个空格,精准匹配)
+ * 特性:
+ *   - 只有管理员能触发(openID 列表,或开了「群主管理员即管理员」)
+ *   - 单轮生效:这一轮工具无条件全开、审批一律免,下一轮自动恢复正常
+ *   - 全套管理工具:沙盒 / 部署 / 技能 / 扩展 / MCP / 模块 / 存储 / 日志
+ * 非管理员发同样内容会被忽略(不当普通 AI 请求处理),避免被提权。
+ */
+export const CREATIVE_MODE_RE = /^AI 创造模式 ([\s\S]+)$/i;
+
+export function parseCreativeMode(text) {
+  const s = String(text || '');
+  const m = s.match(CREATIVE_MODE_RE);
+  return m && m[1].trim() ? m[1].trim() : null;
+}
 
 /**
  * 只认两种 AI 触发:

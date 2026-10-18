@@ -10,6 +10,7 @@ export function buildTools(cfg, extras = {}) {
   const toolSet = extras.toolSet || null; // null = 全开(加载扩展失败时的兜底)
   const modules = Array.isArray(extras.modules) ? extras.modules : [];
   const externalDefs = Array.isArray(extras.externalDefs) ? extras.externalDefs : [];
+  const creative = extras.creative === true; // 创造模式:AI 自写工具只在此时可用
 
   const on = (name) => (toolSet ? toolSet.has(name) : true);
   const out = [];
@@ -354,6 +355,71 @@ export function buildTools(cfg, extras = {}) {
           },
           required: ['host'],
         },
+      },
+    });
+  }
+
+  // ---------- 万能模型层:图像生成 ----------
+  // 配了 imageGen 模型才挂这个工具;没配时 AI 看不到它,也就不会承诺"我给你画一张"
+  if (cfg.modelImageReady) {
+    out.push({
+      type: 'function',
+      function: {
+        name: 'draw_image',
+        description: '按文字描述生成一张图片,生成后会作为图片消息直接发给用户。'
+          + '用户说「画一张」「生成图」「来张图」这类需求时用这个,不要把图片描述成文字。'
+          + 'prompt 用中文或英文写清楚主体、风格、构图,越具体越好。'
+          + '调用之后还要用一句话告诉用户你画了什么。',
+        parameters: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string', description: '要画的内容,例如「一只戴墨镜的橘猫在冲浪,卡通风格」' },
+            size: { type: 'string', description: '可选,图片尺寸,如 1024x1024 / 1024x1792。不填用管理员配的默认值。' },
+          },
+          required: ['prompt'],
+        },
+      },
+    });
+  }
+
+  // ---------- 万物工具:AI 自写工具(仅创造模式可用) ----------
+  // 普通对话不给这两个工具:谁都能让 AI 往系统里塞代码是不安全的。
+  if (creative) {
+    out.push({
+      type: 'function',
+      function: {
+        name: 'create_tool',
+        description: '创建一个可复用的 JS 工具,创建后立即可用,后续所有对话都能调用。'
+          + '适合把你反复要做的一件事固化成工具(查某个接口、算某个东西、格式化某个输出)。'
+          + 'code 里可以用的东西:ctx.args(调用参数对象)、ctx.fetch(url, init)、ctx.log(msg)、'
+          + 'ctx.store.get(k)/set(k,v)/del(k)/list()、ctx.now();用 return 返回结果(对象会按 JSON 返回)。'
+          + '这是受限沙盒 JS:支持 let/const、if/for/while、函数、模板字符串、数组对象,'
+          + '不支持 import/class/await/异步;fetch 是同步语义的简单封装请勿依赖其返回值顺序。',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: '工具名,2-32 位字母/数字/下划线/短横线,例如 quote_kline' },
+            group: { type: 'string', description: '工具组名,同一组的工具共享一个前缀,例如 finance' },
+            group_name: { type: 'string', description: '工具组显示名,可留空' },
+            description: { type: 'string', description: '这个工具干什么、什么时候该调用,写给模型看的' },
+            code: { type: 'string', description: '工具实现代码,用 return 返回结果' },
+            parameters: {
+              type: 'object',
+              description: '参数的 JSON Schema:{type:"object",properties:{参数名:{type,description,required}},required:[...]}',
+            },
+            timeoutMs: { type: 'number', description: '可选,执行超时毫秒,默认 8000,最大 20000' },
+          },
+          required: ['name', 'code'],
+        },
+      },
+    });
+    out.push({
+      type: 'function',
+      function: {
+        name: 'list_tools',
+        description: '列出已经创建的所有 AI 自写工具(含调用名和说明)。'
+          + '不确定某个工具是否已存在、或忘了它叫什么时先查这个。',
+        parameters: { type: 'object', properties: {} },
       },
     });
   }

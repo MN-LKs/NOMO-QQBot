@@ -10,17 +10,21 @@ import { all, ensureSchema, one, run } from '../store/db.js';
 import { listMcp, addMcp, updateMcp, removeMcp, testMcp } from '../agent/mcp.js';
 import { testSearch } from '../agent/search.js';
 import { chatOnce } from '../agent/llm.js';
+import { MODEL_KINDS, ocrImage, asrAudio, ttsSpeech, generateImage, compressText, toBase64 } from '../agent/models.js';
 import { status as storageStatus, availability, resolveStores, scanStore, storeDetail, readStoreFile, writeStoreFile, deleteStoreFile } from '../store/storage.js';
 import { S3Client } from '../store/s3.js';
-import { listModules, getModule, saveModule, removeModule } from '../store/modules.js';
-import { listSkills, saveSkill, removeSkill, parseSkillDoc } from '../agent/skills.js';
-import { loadExts, saveExt, removeExt } from '../agent/exts.js';
+import { listModules, getModule, saveModule, removeModule, agentModules, siteModules } from '../store/modules.js';
+import { listSkills, saveSkill, removeSkill, parseSkillDoc, pickSkills } from '../agent/skills.js';
+import { loadExts, saveExt, removeExt, enabledToolSet, externalToolDefs, scriptDefs } from '../agent/exts.js';
+import { buildTools } from '../agent/tools.js';
+import { buildRegistry, SOURCE_META, registrySummary } from '../agent/registry.js';
 import { execBackend, sandboxFetch } from '../core/backend.js';
 import { parseMotdTarget, queryMotd, formatMotdText } from '../agent/motd.js';
 import { enhanceFiles } from '../util/seo.js';
 import { checkCredentials } from './auth.js';
 
 const JSON_H = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+const UA = 'NOMO-QQBot/4.0';
 
 export function jsonRes(obj, status = 200, extra = {}) {
   return new Response(JSON.stringify(obj), { status, headers: { ...JSON_H, ...extra } });
@@ -87,6 +91,29 @@ export async function handlePanelApi(request, env, url, ctx) {
         effort: settings.llm.deepThinking === false ? 'none' : settings.llm.reasoningEffort,
         quota: { ...q, used },
         state,
+      });
+    }
+
+    // 万物工具总览:四类来源(内部/外部/MCP/模型能力/自写)统一列出
+    if (path === '/tools' && method === 'GET') {
+      const cfg = await loadCfg(env);
+      const exts = await loadExts(env).catch(() => ({ builtin: [], external: [] }));
+      const toolSet = enabledToolSet(exts);
+      const mcp = await mcpToolDefs(env).catch(() => ({ defs: [], map: new Map() }));
+      const skillRows = await listSkills(env, { enabledOnly: true }).catch(() => []);
+      const moduleRows = await listModules(env, { enabledOnly: true }).catch(() => []);
+      const skills = pickSkills(skillRows, '', cfg.skillMaxInject || 6000);
+      const modules = agentModules(moduleRows);
+      const prefabList = siteModules(moduleRows).map((m) => ({ id: m.id, name: m.name, description: m.description }));
+      const scriptT = scriptDefs(exts);
+      const defs = buildTools(cfg, { toolSet, modules, prefabList, externalDefs: [...externalToolDefs(exts).defs, ...scriptT.defs], creative: false });
+      const reg = buildRegistry({ execDefs: defs, toolSet, exts, mcp });
+      return jsonRes({
+        ...reg,
+        sources: SOURCE_META,
+        skills: skills.length,
+        modules: modules.length,
+        note: registrySummary(reg),
       });
     }
 
@@ -258,6 +285,74 @@ export async function handlePanelApi(request, env, url, ctx) {
       const cfg = await loadCfg(env);
       const r = await queryMotd(cfg, target.host, target.port || String(body?.port || ''));
       return jsonRes({ ok: r.ok, result: r, text: formatMotdText(r) });
+    }
+
+    // 万能模型层:面板「模型」页的五类模型测试入口。
+    // 每类模型返回的形态不同(文字 / 图片 / 音频),这里统一转成前端能渲染的东西。
+    if (path === '/test-model' && method === 'POST') {
+      const kind = String(body?.kind || '').trim();
+      if (!MODEL_KINDS.includes(kind)) return jsonRes({ error: '不认识的模型类型:' + kind }, 400);
+      const cfg = await loadCfg(env);
+      const m = cfg.models?.[kind];
+      if (!m || m.enabled !== true) {
+        return jsonRes({ error: '这一类模型没有启用(请在「模型」页打开开关并保存)' }, 400);
+      }
+      if (!m.baseUrl && !cfg.llmBaseUrl) return jsonRes({ error: '既没有填这一类接口地址,主接口地址也是空的' }, 400);
+      if (!m.model) return jsonRes({ error: '模型名还是空的,请先填写模型名并保存' }, 400);
+      const t0 = Date.now();
+      try {
+        if (kind === 'ocr') {
+          const src = String(body?.img || '').trim();
+          if (!src) return jsonRes({ error: '请填一张图片地址(https 或 data:image/…)' }, 400);
+          const r = await ocrImage(m, src, { timeoutMs: 45000 });
+          return jsonRes({ ok: true, ms: Date.now() - t0, text: String(r.text || ''), note: `识别到 ${String(r.text || '').length} 个字符` });
+        }
+        if (kind === 'asr') {
+          const src = String(body?.audio || '').trim();
+          if (!src) return jsonRes({ error: '请填一段音频地址' }, 400);
+          const u = new URL(src);
+          const res = await fetch(u, { headers: { 'User-Agent': UA } });
+          if (!res.ok) throw new Error(`音频下载失败 HTTP ${res.status}`);
+          const buf = new Uint8Array(await res.arrayBuffer());
+          const ct = String(res.headers.get('content-type') || 'audio/wav');
+          const fmt = ct.includes('mpeg') ? 'mp3' : ct.includes('amr') ? 'amr' : 'wav';
+          const r = await asrAudio(m, buf, fmt, { timeoutMs: 60000 });
+          return jsonRes({ ok: true, ms: Date.now() - t0, text: String(r.text || ''), note: `识别到 ${String(r.text || '').length} 个字符` });
+        }
+        if (kind === 'tts') {
+          const text = String(body?.text || '').trim();
+          if (!text) return jsonRes({ error: '请填要念的文字' }, 400);
+          const r = await ttsSpeech(m, text, { timeoutMs: 45000 });
+          const ct = r.contentType || 'audio/mpeg';
+          return jsonRes({
+            ok: true, ms: Date.now() - t0,
+            text: `音频 ${Math.round(r.bytes.length / 1024)} KB,类型 ${ct}`,
+            audioData: `data:${ct};base64,${toBase64(r.bytes)}`,
+            note: '可以直接在这里试听;QQ 语音消息需要服务端把音频转成平台支持的格式。',
+          });
+        }
+        if (kind === 'imageGen') {
+          const prompt = String(body?.prompt || '').trim();
+          if (!prompt) return jsonRes({ error: '请填要画的内容' }, 400);
+          const r = await generateImage(m, prompt, { size: body?.size, timeoutMs: 60000 });
+          return jsonRes({
+            ok: true, ms: Date.now() - t0,
+            text: `图片 ${Math.round(r.bytes.length / 1024)} KB`,
+            imageData: `data:${r.contentType || 'image/png'};base64,${toBase64(r.bytes)}`,
+          });
+        }
+        if (kind === 'compress') {
+          const text = String(body?.text || '').trim();
+          if (!text) return jsonRes({ error: '请填要压缩的长文本' }, 400);
+          const r = await compressText(m, text, { timeoutMs: 60000 });
+          const out = String(r.text || '');
+          return jsonRes({ ok: true, ms: Date.now() - t0, text: out, note: `原文 ${text.length} 字 → 摘要 ${out.length} 字` });
+        }
+        return jsonRes({ error: '这一类模型还没有测试入口' }, 400);
+      } catch (e) {
+        await logWrite(env, 'warn', 'panel', `模型测试失败 ${kind}: ${e?.message || e}`).catch(() => null);
+        return jsonRes({ error: String(e?.message || e).slice(0, 300) }, 200);
+      }
     }
 
     if (seg[0] === 'projects') {
@@ -942,6 +1037,7 @@ async function checkUpdate(cfg) {
     latestMessage: '',
     latestDate: '',
     updateAvailable: false,
+    emergency: false,
     force: false,
     note: '',
   };
@@ -952,6 +1048,7 @@ async function checkUpdate(cfg) {
       out.latestSha = String(c?.sha || '').slice(0, 8);
       out.latestMessage = String(c?.commit?.message || '').split('\n')[0].slice(0, 200);
       out.latestDate = c?.commit?.author?.date || '';
+      out.emergency = /\[emergency\]|EMERGENCY/i.test(out.latestMessage);
       out.force = /\[force-update\]|FORCE_UPDATE/i.test(out.latestMessage);
     }
   } catch (e) {
