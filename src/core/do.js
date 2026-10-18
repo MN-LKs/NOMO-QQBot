@@ -1,5 +1,6 @@
 import { loadCfg } from '../store/settings.js';
 import { SCHEMA } from './schema.js';
+import { ALTERS } from './schema.js';
 import { logWrite } from '../store/logs.js';
 import { bump, bumpMany, bumpDaily, touchGroup } from '../store/stats.js';
 import * as P from '../store/projects.js';
@@ -34,6 +35,14 @@ export class BotCore {
     this._token = null;
     this._tokenExp = 0;
     for (const stmt of SCHEMA) this.sql.exec(stmt);
+    // 老库补列:加过的会报 duplicate column name,忽略即可
+    for (const stmt of ALTERS) {
+      try {
+        this.sql.exec(stmt);
+      } catch {
+        /* 列已存在 */
+      }
+    }
   }
 
   async cfg(force = false) {
@@ -133,6 +142,10 @@ export class BotCore {
 
     const expired = await P.purgeExpired(this.env).catch(() => []);
     if (expired.length) await logWrite(this.env, 'info', 'do', `自动清理过期项目:${expired.join(', ')}`);
+    // 部署确认超时:撤卡片 + 回给 Agent
+    await this.expirePendingDeploys().catch((e) => {
+      logWrite(this.env, 'warn', 'do', `处理部署超时失败:${e?.message || e}`);
+    });
 
     let processed = 0;
     const deadline = Date.now() + ALARM_DEADLINE_MS;
@@ -728,19 +741,26 @@ Object.assign(BotCore.prototype, {
     };
   },
 
-  async createPendingDeploy({ name, description, files, owner }, p = null) {
+  async createPendingDeploy({ name, description, files, owner, architectures }, p = null) {
     const cfg = await this.cfg();
     const token = genId('ascii', 16);
     const now = Date.now();
-    const expiresAt = now + 10 * 60 * 1000;
-    const payload = { name, description, files, owner };
+    const arch = (Array.isArray(architectures) && architectures.length ? architectures : ['html']).join(',');
+    // 卡片等的秒数:默认 30 秒。QQ 撤回接口只允许撤 2 分钟内的消息,
+    // 所以这个上限最多给到 100 秒,再长就撤不回来了。
+    const waitSec = Math.max(10, Math.min(100, Number(cfg.deployWaitSeconds) || 30));
+    const expiresAt = now + waitSec * 1000;
+    const payload = { name, description, files, owner, architectures: arch.split(',') };
     this.sql.exec(
-      'INSERT INTO pending (token, payload, conv_id, target_id, scene, msg_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      token, JSON.stringify(payload), p?.convId || '', p?.targetId || '', p?.scene || '', p?.messageId || '', now, expiresAt,
+      'INSERT INTO pending (token, payload, arch, conv_id, target_id, scene, msg_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      token, JSON.stringify(payload), arch, p?.convId || '', p?.targetId || '', p?.scene || '', p?.messageId || '', now, expiresAt,
     );
     const base = String(cfg.publicBaseUrl || '').replace(/\/$/, '');
     return {
       token,
+      arch,
+      architectures: payload.architectures,
+      waitSeconds: waitSec,
       url: base ? `${base}/confirm/${token}` : '',
       expiresAt,
     };
@@ -771,15 +791,15 @@ Object.assign(BotCore.prototype, {
     this.sql.exec('DELETE FROM pending WHERE token = ?', row.token);
     if (!approve) {
       if (notify) await this.notifyPending(row, '已取消这次部署。');
-      return { ok: true, canceled: true };
+      return { ok: true, canceled: true, row };
     }
     const r = await this.createSite(row.payload);
     if (r.error) {
       if (notify) await this.notifyPending(row, `部署失败:${r.error}`);
-      return { error: r.error };
+      return { error: r.error, row };
     }
     if (notify) await this.notifyPending(row, `部署成功:${r.url}\n项目:${r.name}\n存活 ${r.ttlMinutes} 分钟。`);
-    return { ok: true, site: r };
+    return { ok: true, site: r, row };
   },
 
   async notifyPending(row, text) {
@@ -1041,13 +1061,20 @@ Object.assign(BotCore.prototype, {
     ];
     const keyboard = { content: { rows: [{ buttons }] } };
     const files = Array.isArray(pending.files) ? pending.files : [];
+    const arch = Array.isArray(pending.architectures) ? pending.architectures : ['html'];
+    const archText = [
+      arch.includes('custom') ? '自定义后端(_backend.js)' : '',
+      arch.includes('prefab') ? '预制后端接口' : '',
+    ].filter(Boolean).join(' + ') || '纯静态网页';
+    const waitSec = Math.max(10, Math.min(100, Number(cfg.deployWaitSeconds) || 30));
     const content = [
       '## 待确认部署',
       `**项目**:${String(pending.name || '未命名项目').slice(0, 60)}`,
       pending.description ? `**说明**:${String(pending.description).slice(0, 120)}` : '',
+      `**启用**:${archText}`,
       `**文件**:${files.map((f) => f.path).slice(0, 6).join('、') || '—'}`,
       '',
-      '确认后才会真正创建项目,10 分钟内有效。',
+      `确认后才会真正创建项目;${waitSec} 秒不操作会自动撤回本卡片。`,
     ].filter(Boolean).join('\n');
     const common = {
       content,
@@ -1055,10 +1082,91 @@ Object.assign(BotCore.prototype, {
       msgId: p.messageId,
       msgSeq: this.nextSeq(p),
     };
+    let r;
     if (p.scene === 'group') {
-      return await sendGroupMarkdown(cfg, token, { ...common, groupOpenid: p.targetId });
+      r = await sendGroupMarkdown(cfg, token, { ...common, groupOpenid: p.targetId });
+    } else {
+      r = await sendC2CMarkdown(cfg, token, { ...common, openid: p.targetId });
     }
-    return await sendC2CMarkdown(cfg, token, { ...common, openid: p.targetId });
+    // 记下卡片消息 ID,超时后要拿它去撤回
+    const cardMsgId = r?.ok ? String(r.data?.id || '') : '';
+    if (cardMsgId) {
+      this.sql.exec('UPDATE pending SET card_msg_id = ? WHERE token = ?', cardMsgId, pending.token);
+    }
+    return { ok: r.ok, cardMsgId, error: r.ok ? '' : explainError(r.data) };
+  },
+
+  // 撤回待确认卡片,并把 pending 标记为已通知(超时路径用)
+  async recallDeployCard(row, cfg) {
+    if (!row?.card_msg_id || !row?.scene || !row?.target_id) return;
+    try {
+      const token = await this.getToken();
+      const { recallMessage } = await import('../qq/api.js');
+      await recallMessage(cfg, token, row.scene, row.target_id, row.card_msg_id);
+    } catch {
+      /* 撤回失败不挡后续流程 */
+    }
+  },
+
+  // 部署确认超时:30 秒没人点,撤回卡片,并把「超时」如实回给 Agent,
+  // 让它知道这次审批没有结果,自己决定下一步(重问用户 / 换纯静态方案 / 直接说明)。
+  // 同一张卡片只回一次(notified 去重),避免 DO 被反复唤醒时刷屏。
+  async expirePendingDeploys() {
+    const rows = this.sql.exec(
+      'SELECT * FROM pending WHERE expires_at <= ? AND notified = 0', Date.now()).toArray();
+    for (const row of rows) {
+      this.sql.exec('UPDATE pending SET notified = 1 WHERE token = ?', row.token);
+      const cfg = await this.cfg();
+      await this.recallDeployCard(row, cfg);
+      this.sql.exec('DELETE FROM pending WHERE token = ?', row.token);
+      let payload = {};
+      try {
+        payload = JSON.parse(row.payload);
+      } catch {
+        /* ignore */
+      }
+      const waitSec = Math.max(10, Math.min(100, Number(cfg.deployWaitSeconds) || 30));
+      await logWrite(this.env, 'warn', 'deploy', `部署确认超时(token=${row.token}),已撤回卡片`);
+      // 没有会话可回(比如群里已解散)就到此为止
+      if (!row.conv_id || !row.target_id || !row.scene) continue;
+      const p = {
+        scene: row.scene,
+        targetId: row.target_id,
+        messageId: row.msg_id,
+        convId: row.conv_id,
+        nickname: '系统',
+        eventId: '',
+      };
+      try {
+        await this.reply(p, `⏳ ${waitSec} 秒内没有管理员确认,这次部署已取消,卡片已撤回。`, { mode: 'passive' });
+        await this.feedAgentSystemNotice(p, cfg,
+          `系统通知:部署确认已超时(${waitSec} 秒无人点击),确认卡片已撤回,项目「${String(payload.name || '未命名项目').slice(0, 60)}」没有创建。`
+          + '请把这个结果如实告诉用户,不要假装部署成功。');
+      } catch (e) {
+        await logWrite(this.env, 'warn', 'deploy', `超时通知 Agent 失败:${e?.message || e}`);
+      }
+    }
+  },
+
+  // 把系统结果喂回 Agent,让它继续处理并用自然语言告诉用户。
+  // 和 handleInteraction 里点击后的处理是同一套。
+  async feedAgentSystemNotice(p, cfg, text) {
+    const follow = await runAgent({
+      cfg,
+      core: this,
+      convId: p.convId,
+      userText: text,
+      meta: { botName: 'NOMO', nickname: '系统', p },
+      log: (m, lv = 'info') => logWrite(this.env, lv, 'chat', m),
+    });
+    const out = String(follow.reply || '').trim();
+    if (out) {
+      await this.reply(p, out, { mode: 'passive', markdown: cfg.markdownEnabled });
+      this.appendMessages(p.convId, [
+        { role: 'user', content: text },
+        { role: 'assistant', content: truncate(out, 2500) },
+      ]);
+    }
   },
 
   async handleInteraction(p) {
@@ -1091,24 +1199,12 @@ Object.assign(BotCore.prototype, {
     const resultText = r.canceled
       ? '已取消这次部署,没有创建项目。'
       : `部署成功 ✅\n项目:${r.site.name}\n链接:${r.site.url}\n存活 ${r.site.ttlMinutes} 分钟。`;
+    // 点完就把卡片撤掉,别让一张废卡片留在群里
+    await this.recallDeployCard({ ...r.row, ...r }, cfg).catch(() => null);
     await this.reply(replyP, resultText, { mode: 'passive' });
     try {
-      const follow = await runAgent({
-        cfg,
-        core: this,
-        convId: p.convId,
-        userText: `系统通知:${resultText}\n请根据这个结果继续处理,并把结果用自然语言告诉用户。`,
-        meta: { botName: 'NOMO', nickname: '系统', p: replyP },
-        log: (m, lv = 'info') => logWrite(this.env, lv, 'chat', m),
-      });
-      const text = String(follow.reply || '').trim();
-      if (text) {
-        await this.reply(replyP, text, { mode: 'passive', markdown: cfg.markdownEnabled });
-        this.appendMessages(p.convId, [
-          { role: 'user', content: `系统通知:${resultText}` },
-          { role: 'assistant', content: truncate(text, 2500) },
-        ]);
-      }
+      await this.feedAgentSystemNotice(replyP, cfg,
+        `系统通知:${resultText}\n请根据这个结果继续处理,并把结果用自然语言告诉用户。`);
     } catch (e) {
       await logWrite(this.env, 'warn', 'interaction', `确认后继续 Agent 失败:${e?.message || e}`);
     }

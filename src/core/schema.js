@@ -58,12 +58,26 @@ export const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS pending (
      token       TEXT PRIMARY KEY,
      payload     TEXT NOT NULL,
+     arch        TEXT NOT NULL DEFAULT 'html',
      conv_id     TEXT,
      target_id   TEXT,
      scene       TEXT,
      msg_id      TEXT,
+     card_msg_id TEXT,
+     notify_ts   INTEGER,
+     notified    INTEGER NOT NULL DEFAULT 0,
      created_at  INTEGER NOT NULL,
      expires_at  INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS idx_pending_exp ON pending(expires_at)`,
+];
+
+// DO 的 SQLite 用 CREATE TABLE IF NOT EXISTS,老库不会自动长出新列。
+// 部署确认卡片后来加了 arch / card_msg_id / notify_ts / notified,
+// 这里逐个补列,加过了就跳过(duplicate column name 直接忽略)。
+export const ALTERS = [
+  `ALTER TABLE pending ADD COLUMN arch TEXT NOT NULL DEFAULT 'html'`,
+  `ALTER TABLE pending ADD COLUMN card_msg_id TEXT`,
+  `ALTER TABLE pending ADD COLUMN notify_ts INTEGER`,
+  `ALTER TABLE pending ADD COLUMN notified INTEGER NOT NULL DEFAULT 0`,
 ];

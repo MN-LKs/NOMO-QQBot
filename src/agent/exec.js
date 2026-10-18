@@ -352,12 +352,17 @@ export async function executeTool(name, args, ctx) {
 
       case 'deploy_site': {
         const files = normaliseFiles(a.files, ctx.cfg);
-        if (ctx.cfg.deployConfirm) {
+        const wantBackend = a.enableCustomBackend === true;
+        const wantPrefab = a.enablePrefabBackend === true;
+        // 只有「要跑服务端代码」才需要管理员审批;纯静态网页直接部署。
+        const needConfirm = (wantBackend || wantPrefab) && ctx.cfg.deployConfirm;
+        if (needConfirm) {
           const pending = await ctx.core.createPendingDeploy({
             name: a.name,
             description: a.description,
             files,
             owner: ctx.convId,
+            architectures: [wantBackend ? 'custom' : '', wantPrefab ? 'prefab' : ''].filter(Boolean),
           }, ctx.meta?.p);
           if (pending.error) return pending.error;
           const sent = await ctx.core.sendDeployCard(ctx.meta?.p, {
@@ -365,6 +370,7 @@ export async function executeTool(name, args, ctx) {
             name: a.name,
             description: a.description,
             files,
+            architectures: pending.architectures,
           }, ctx.cfg);
           const cardFail = sent?.error || '';
           const webUrl = pending.url || '';
@@ -377,7 +383,7 @@ export async function executeTool(name, args, ctx) {
                 ? `管理员可以在网页上确认:${webUrl}(10 分钟内有效)`
                 : '确认卡片和网页链接都不可用,请管理员检查站点域名或稍后重试。')
               : '确认卡片已经发到群里,等待管理员点击「确认部署」或「取消」。',
-            '【重要】不要自己创建项目;管理员确认后系统会继续处理。',
+            '【重要】不要自己创建项目;管理员确认后系统会继续处理,并把结果回给你。',
           ].join('\n');
         }
         const r = await ctx.core.createSite({

@@ -46,6 +46,17 @@ export function buildTools(cfg, extras = {}) {
           properties: {
             name: { type: 'string', description: '项目短名,例如「2048 小游戏」' },
             description: { type: 'string', description: '一句话说明这个网页是干什么的' },
+            enableCustomBackend: {
+              type: 'boolean',
+              description: '是否需要服务端自己写的后端代码(_backend.js)。'
+                + 'false = 纯静态网页,直接部署不用审批;'
+                + 'true = 要跑服务端代码,需要机器人管理员在群里点确认才会真正部署。',
+            },
+            enablePrefabBackend: {
+              type: 'boolean',
+              description: '是否需要调用面板「模块」页里勾了「站点后端」的预制接口。'
+                + 'true 时同样需要管理员确认。',
+            },
             files: {
               type: 'array',
               description: '文件列表,路径用相对路径,例如 index.html / style.css / app.js',

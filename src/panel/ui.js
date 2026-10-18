@@ -396,6 +396,23 @@ function confirmBox(title,text,onOk,danger){
  m.querySelector('[data-x]').onclick=function(){m.remove()};
  m.querySelector('[data-ok]').onclick=function(){m.remove();onOk()}}
 function sw(on,attr){return '<div class="sw'+(on?' on':'')+'" '+attr+'></div>'}
+
+// 拼出 [data-t="x"] 或 [data-mod="x"],避开在模板字符串里反复转义引号
+function selAttr(attr){return '[data-t="'+attr+'"]'}
+
+// 开关统一绑定入口:点一下立刻翻转并保存。
+// 旧写法每页手写 querySelector(...).onclick,有两大坑:
+//   1) 没做 null 判断,某个节点不存在就抛 TypeError,把后面的绑定全部中断;
+//   2) 有几个只切 class 不发请求,看着生效了,刷新页面就还原(用户说的"点了没反应")。
+// 现在统一走这里:缺节点只 warn 并跳过,绝不拖垮同页其他开关。
+function bindTog(root,attr,makePatch,save){
+ var n=root.querySelector(selAttr(attr))||root.querySelector('[data-mod="'+attr+'"]');
+ if(!n){console.warn('[panel] 开关没渲染出来,绑定跳过:'+attr);return}
+ n.onclick=function(){
+  var on=!n.classList.contains('on');n.classList.toggle('on',on);
+  if(!save){console.warn('[panel] 开关缺少 save 回调:'+attr);return}
+  try{save(makePatch(on))}catch(e){toast(e.message)}
+ }};
 function showUpdateInfo(r){
  var lines=[];
  lines.push('<div class="hint">当前版本 <b>'+h(r.current||ME.appVersion)+'</b> · 最新版本 <b>'+h(r.latestVersion||'未知')+'</b></div>');
@@ -532,9 +549,13 @@ function pageHomepageConfig(){
    '<div class="small dim" style="margin-top:4px">自定义首页里的脚本可以请求 <span class="mono">/home-api/任意路径</span>,由这段 JS 在沙盒里执行;支持 ctx.method / ctx.path / ctx.query / ctx.body / ctx.json() / ctx.fetch()。</div></div>'+
    '<div style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="hp-save">保存</button><a class="btn" href="/" target="_blank" rel="noopener">打开首页</a></div>'+
    '<div class="hint" style="margin-top:12px">首页是公开页面,不要在介绍里写密钥或内部地址。自定义 HTML 会原样返回,请自己保证安全。</div></div>';
-  v.querySelector('[data-t="hpEnabled"]').onclick=function(){this.classList.toggle('on')};
-  v.querySelector('[data-t="hpGithub"]').onclick=function(){this.classList.toggle('on')};
-  v.querySelector('[data-t="hpCustom"]').onclick=function(){this.classList.toggle('on')};
+  function save(patch){
+   api('/settings',{method:'POST',body:patch}).then(function(r){toast(r.note||'已保存');S.settings=null})
+    .catch(function(e){toast(e.message)});
+  }
+  bindTog(v,'hpEnabled',function(on){return {ui:{homepage:{enabled:on}}}},save);
+  bindTog(v,'hpGithub',function(on){return {ui:{homepage:{showGithub:on}}}},save);
+  bindTog(v,'hpCustom',function(on){return {ui:{homepage:{custom:on}}}},save);
   v.querySelector('#hp-save').onclick=function(){
    var b=this;b.disabled=true;b.textContent='保存中…';
    api('/settings',{method:'POST',body:{ui:{homepage:{
@@ -830,17 +851,17 @@ function bindAgent(v,d){
   }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='测试搜索'})};
  v.querySelector('#ag-persona-save').onclick=function(){save({persona:v.querySelector('#ag-persona').value},this)};
  v.querySelector('#ag-workflow-save').onclick=function(){save({llm:{workflow:v.querySelector('#ag-workflow').value}},this)};
- v.querySelector('[data-t="agSeEnabled"]').onclick=function(){this.classList.toggle('on');save({search:{enabled:this.classList.contains('on')}})};
- v.querySelector('[data-t="agSeMerge"]').onclick=function(){this.classList.toggle('on');save({search:{mergeReader:this.classList.contains('on')}})};
- v.querySelector('[data-t="agVision"]').onclick=function(){this.classList.toggle('on')};
- v.querySelector('[data-mod="audio"]').onclick=function(){this.classList.toggle('on')};
+ bindTog(v,'agSeEnabled',function(on){return {search:{enabled:on}}},save);
+ bindTog(v,'agSeMerge',function(on){return {search:{mergeReader:on}}},save);
+ bindTog(v,'agVision',function(on){return {agent:{vision:on}}},save);
+ var audN=v.querySelector('[data-mod="audio"]');if(audN)audN.onclick=function(){this.classList.toggle("on")};
  v.querySelector('#ag-mod-save').onclick=function(){
   var vision=v.querySelector('[data-t="agVision"]').classList.contains('on');
   var arr=['text'];if(vision)arr.push('image');
   if(v.querySelector('[data-mod="audio"]').classList.contains('on'))arr.push('audio');
   save({agent:{modalities:arr,vision:vision}},this)};
- v.querySelector('[data-t="agMotdEnabled"]').onclick=function(){this.classList.toggle('on')};
- v.querySelector('[data-t="agMotdImage"]').onclick=function(){this.classList.toggle('on')};
+ bindTog(v,'agMotdEnabled',function(on){return {motd:{enabled:on}}},save);
+ bindTog(v,'agMotdImage',function(on){return {motd:{imageEnabled:on}}},save);
  v.querySelector('#ag-motd-save').onclick=function(){
   save({motd:{
    enabled:v.querySelector('[data-t="agMotdEnabled"]').classList.contains('on'),
@@ -993,18 +1014,21 @@ function bindSettings(v){
    markdown:v.querySelector('[data-t="qqMarkdown"]').classList.contains('on')}}})
   .then(function(r){toast(r.note||'已保存并应用');S.settings=null;render()})
   .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='保存并应用'})};
- function tog(sel,path){var n=v.querySelector(sel);if(!n)return;n.onclick=function(){
-  var on=!n.classList.contains('on');n.classList.toggle('on',on);
-  var patch={};patch[path[0]]={};patch[path[0]][path[1]]=on;save(patch)}};
- tog('[data-t="allowAll"]',['groups','allowAll']);
- tog('[data-t="groupAdmins"]',['admin','groupAdmins']);
- tog('[data-t="qqMarkdown"]',['qq','markdown']);
- tog('[data-t="allowData"]',['deploy','allowData']);
- tog('[data-t="deployConfirm"]',['deploy','confirm']);
- tog('[data-t="updateCheck"]',['update','check']);
- tog('[data-t="debug"]',['logs','debug']);
- tog('[data-t="seEnabled"]',['search','enabled']);
- tog('[data-t="seMerge"]',['search','mergeReader']);
+function stog(sel,path){var n=v.querySelector(sel);
+  if(!n){console.warn('[panel] 开关没有渲染出来,绑定跳过:'+sel);return}
+  n.onclick=function(){
+   var on=!n.classList.contains('on');n.classList.toggle('on',on);
+   var patch={};patch[path[0]]={};patch[path[0]][path[1]]=on;save(patch)}};
+ stog('[data-t="allowAll"]',['groups','allowAll']);
+ stog('[data-t="groupAdmins"]',['admin','groupAdmins']);
+ stog('[data-t="qqMarkdown"]',['qq','markdown']);
+ stog('[data-t="allowData"]',['deploy','allowData']);
+ stog('[data-t="deployConfirm"]',['deploy','confirm']);
+ stog('[data-t="updateCheck"]',['update','check']);
+ stog('[data-t=\"forceUpdate\"]',['update','force']);
+ stog('[data-t="debug"]',['logs','debug']);
+ stog('[data-t="seEnabled"]',['search','enabled']);
+ stog('[data-t="seMerge"]',['search','mergeReader']);
  var archArr=function(){var out=[];
   if(v.querySelector('[data-t="archHtml"]').classList.contains('on'))out.push('html');
   if(v.querySelector('[data-t="archPrefab"]').classList.contains('on'))out.push('prefab');

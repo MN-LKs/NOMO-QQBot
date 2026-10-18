@@ -50,6 +50,21 @@ async function post(cfg, token, path, body) {
   return { ok: res.ok, status: res.status, data };
 }
 
+async function del(cfg, token, path) {
+  const res = await fetch(cfg.apiBase + path, {
+    method: 'DELETE',
+    headers: headers(token),
+  });
+  const text = await res.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text.slice(0, 300) };
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
 export function sendGroupMessage(cfg, token, o) {
   const body = { msg_type: 0, content: String(o.content) };
   if (o.eventId) body.event_id = o.eventId;
@@ -272,6 +287,26 @@ export async function unmuteGroupMember(cfg, token, groupOpenid, memberOpenid) {
   return await post(cfg, token, `/v2/groups/${encodeURIComponent(groupOpenid)}/restrict_chat_setting`, {
     members: [{ op: 'remove', member_openid: String(memberOpenid) }],
   });
+}
+
+// 撤回机器人自己发的消息。
+// 官方限制:发送超过 2 分钟的消息不能撤回;接口频率 10 QPS。
+// messageId 用的是发送接口回包里的 id(不是 msg_id)。
+export async function recallGroupMessage(cfg, token, groupOpenid, messageId) {
+  if (!messageId) return { ok: false, error: '缺少 message_id' };
+  return await del(cfg, token, `/v2/groups/${encodeURIComponent(groupOpenid)}/messages/${encodeURIComponent(messageId)}`);
+}
+
+export async function recallC2CMessage(cfg, token, openid, messageId) {
+  if (!messageId) return { ok: false, error: '缺少 message_id' };
+  return await del(cfg, token, `/v2/users/${encodeURIComponent(openid)}/messages/${encodeURIComponent(messageId)}`);
+}
+
+export async function recallMessage(cfg, token, scene, targetId, messageId) {
+  if (!messageId) return { ok: false, error: '缺少 message_id' };
+  return scene === 'c2c'
+    ? recallC2CMessage(cfg, token, targetId, messageId)
+    : recallGroupMessage(cfg, token, targetId, messageId);
 }
 
 function chunkRaw(text, size) {

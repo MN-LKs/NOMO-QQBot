@@ -112,6 +112,7 @@ export const DEFAULT_SETTINGS = {
     maxPerDay: 50,
     allowData: true,
     confirm: false,
+    waitSeconds: 30,
     apiPerMinute: 60,
   },
   logs: { debug: false, retentionDays: 7, maxRows: 8000 },
@@ -323,6 +324,7 @@ export function flatten(settings, env = {}) {
     dataQuotaBytes: Number(dep.dataQuotaBytes) || 256 * 1024,
     allowData: dep.allowData !== false,
     deployConfirm: dep.confirm === true,
+    deployWaitSeconds: Math.max(10, Math.min(100, Number(dep.waitSeconds) || 30)),
     apiPerMinute: Math.max(10, Math.min(600, Number(dep.apiPerMinute) || FIXED.siteApiPerMinute)),
     settings,
   };
