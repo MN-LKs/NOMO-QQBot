@@ -784,6 +784,8 @@ function bindAgent(v,d){
  v.querySelector('#ag-workflow-save').onclick=function(){save({llm:{workflow:v.querySelector('#ag-workflow').value}},this)};
  v.querySelector('[data-t="agSeEnabled"]').onclick=function(){this.classList.toggle('on');save({search:{enabled:this.classList.contains('on')}})};
  v.querySelector('[data-t="agSeMerge"]').onclick=function(){this.classList.toggle('on');save({search:{mergeReader:this.classList.contains('on')}})};
+ v.querySelector('[data-t="agVision"]').onclick=function(){this.classList.toggle('on')};
+ v.querySelector('[data-mod="audio"]').onclick=function(){this.classList.toggle('on')};
  v.querySelector('#ag-mod-save').onclick=function(){
   var vision=v.querySelector('[data-t="agVision"]').classList.contains('on');
   var arr=['text'];if(vision)arr.push('image');
