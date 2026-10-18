@@ -2,11 +2,12 @@ import { calc, formatNumber } from '../util/calc.js';
 import { htmlToText } from '../util/html.js';
 import { truncate } from '../util/text.js';
 import { webSearch, readPage } from './search.js';
+import { parseMotdTarget, queryMotd, formatMotdText } from './motd.js';
 import { execBackend, moduleResultText, sandboxFetch } from '../core/backend.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
 
-const TOOL_LIST = 'calc, now, web_search, fetch_url, group_recent, group_find, deploy_site, update_site, list_sites, read_site, delete_site, fs_write, fs_read, fs_list, fs_edit, fs_delete, fs_deploy, remember, recall, forget, random, encode, query_dashboard';
+const TOOL_LIST = 'calc, now, motd, web_search, fetch_url, group_recent, group_find, deploy_site, update_site, list_sites, read_site, delete_site, fs_write, fs_read, fs_list, fs_edit, fs_delete, fs_deploy, remember, recall, forget, random, encode, query_dashboard';
 
 function fmtTime(d, offsetHours) {
   const t = new Date(d.getTime() + offsetHours * 3600_000);
@@ -204,6 +205,14 @@ export async function executeTool(name, args, ctx) {
         return `现在是 ${t.text}(${t.tz}),ISO: ${t.iso}`;
       }
 
+      case 'motd': {
+        const target = parseMotdTarget(a.host || a.ip || '');
+        if (target.error) return target.error;
+        const port = String(a.port || target.port || '');
+        const r = await queryMotd(ctx.cfg, target.host, port);
+        return formatMotdText(r);
+      }
+
       case 'web_search': {
         const t0 = Date.now();
         const out = await webSearch(ctx.cfg, String(a.query || ''), a.count);
@@ -266,6 +275,22 @@ export async function executeTool(name, args, ctx) {
 
       case 'deploy_site': {
         const files = normaliseFiles(a.files, ctx.cfg);
+        if (ctx.cfg.deployConfirm) {
+          const pending = await ctx.core.createPendingDeploy({
+            name: a.name,
+            description: a.description,
+            files,
+            owner: ctx.convId,
+          }, ctx.meta?.p);
+          if (pending.error) return pending.error;
+          return [
+            '已创建待确认部署 ⏳',
+            `项目名: ${a.name || '未命名项目'}`,
+            `文件: ${files.map((f) => f.path).join(', ')}`,
+            pending.url ? `确认链接: ${pending.url}` : `确认指令: ${pending.fallback}`,
+            '【重要】把确认链接/指令原样告诉用户;管理员确认后才会真正部署,10 分钟内有效。',
+          ].join('\n');
+        }
         const r = await ctx.core.createSite({
           name: a.name,
           description: a.description,

@@ -73,6 +73,36 @@ export function page(code, msg, status = 404, note = '这个页面由 NOMO-QQBot
     });
 }
 
+export async function serveMedia(env, request, url) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    return new Response('Method Not Allowed', { status: 405, headers: { Allow: 'GET, HEAD' } });
+  }
+  const key = String(url.pathname || '').replace(/^\/media\//, '');
+  if (!/^[a-zA-Z0-9_-]{6,80}\.(png|jpe?g|gif|webp)$/.test(key)) {
+    return new Response('Not Found', { status: 404 });
+  }
+  if (!env.STORE) return new Response('Not Found', { status: 404 });
+  let buf;
+  try {
+    buf = await env.STORE.get(`media/${key}`, 'arrayBuffer');
+  } catch {
+    buf = null;
+  }
+  if (!buf) return new Response('Not Found', { status: 404 });
+  const ext = key.split('.').pop().toLowerCase();
+  const ct = ext === 'png' ? 'image/png'
+    : ext === 'gif' ? 'image/gif'
+      : ext === 'webp' ? 'image/webp'
+        : 'image/jpeg';
+  return new Response(buf, {
+    headers: {
+      'Content-Type': ct,
+      'Cache-Control': 'public, max-age=600',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  });
+}
+
 export async function serveSite(env, cfg, request, url, ctx) {
   const { id, rest } = splitSitePath(url.pathname);
   if (!id) return null;
@@ -137,7 +167,7 @@ function json(obj, status = 200) {
 export const RESERVED = new Set([
   'qq', 'api', 'admin', 'administrator', 'health', 'check', 'favicon', 'robots',
   'index', 's', 'd', 'static', 'assets', '__data', 'cron', 'www', 'app', 'login',
-  'logout', 'null', 'undefined', 'test', 'panel', 'v1',
+  'logout', 'null', 'undefined', 'test', 'panel', 'v1', 'media', 'confirm',
 ]);
 
 // 站点后端接口:

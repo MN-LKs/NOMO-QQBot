@@ -5,15 +5,30 @@ import { CSP_PANEL } from '../config.js';
  * 公开页面,不依赖 D1/KV;即使面板还没配置好也能打开。
  * 纯 CSS 动效,不引外部资源,符合面板 CSP。
  */
-export function homePage() {
+export function homePage(settings = null) {
+  const hp = settings?.ui?.homepage || {};
+  const title = String(hp.title || 'NOMO');
+  const subtitle = String(hp.subtitle || 'QQ 群聊 · AI 助手');
+  const description = String(hp.description || 'NOMO 是一个跑在 Cloudflare Workers 上的 QQ 机器人。它能聊天、能搜索、能调用工具,还能在群里直接生成并部署一个临时网页。没有服务器,没有常驻进程,闲时自动休眠。');
+  const github = String(hp.github || 'https://github.com/MN-LKs/NOMO-QQBot');
+  const showGithub = hp.showGithub !== false;
+  const esc = (s) => String(s ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  if (hp.enabled === false) {
+    return new Response('首页未启用', {
+      status: 404,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
   const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#070b14">
-<meta name="description" content="NOMO 是一个跑在 Cloudflare Workers 上的 QQ 群聊 AI 助手,支持工具调用、临时网页部署和群聊管理。">
-<title>NOMO · 群聊里的 AI 助手</title>
+<meta name="description" content="${esc(description)}">
+<title>${esc(title)} · 群聊里的 AI 助手</title>
 <style>
 :root{--bg:#070b14;--text:#eaf0ff;--dim:#93a4c4;--line:rgba(255,255,255,.12);--accent:#6ea8ff;--accent2:#a78bfa}
 *{box-sizing:border-box}
@@ -89,7 +104,7 @@ h1 .g{background:linear-gradient(110deg,#dbeafe 5%,#8bb8ff 38%,#c4b5fd 72%,#f0ab
   <header class="top">
     <div class="brand">
       <span class="mark"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
-      <span>NOMO</span>
+      <span>${esc(title)}</span>
     </div>
     <div class="sp"></div>
     <span class="pill"><i class="dot"></i>Cloudflare Workers</span>
@@ -97,11 +112,11 @@ h1 .g{background:linear-gradient(110deg,#dbeafe 5%,#8bb8ff 38%,#c4b5fd 72%,#f0ab
 
   <section class="hero">
     <div>
-      <span class="eyebrow">QQ 群聊 · AI 助手</span>
+      <span class="eyebrow">${esc(subtitle)}</span>
       <h1>把 AI 放进群聊,<br><span class="g">也把工具交给它。</span></h1>
-      <p class="lead">NOMO 是一个跑在 Cloudflare Workers 上的 QQ 机器人。它能聊天、能搜索、能调用工具,还能在群里直接生成并部署一个临时网页。没有服务器,没有常驻进程,闲时自动休眠。</p>
+      <p class="lead">${esc(description)}</p>
       <div class="actions">
-        <a class="btn primary" href="https://github.com/MN-LKs/NOMO-QQBot" target="_blank" rel="noopener">
+        <a class="btn primary" href="${esc(github)}" target="_blank" rel="noopener" style="display:${showGithub ? 'inline-flex' : 'none'}">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2.2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.5 11.5 0 0 0 23.5 12C23.5 5.7 18.3.5 12 .5Z"/></svg>
           GitHub 仓库
         </a>
@@ -125,9 +140,9 @@ h1 .g{background:linear-gradient(110deg,#dbeafe 5%,#8bb8ff 38%,#c4b5fd 72%,#f0ab
   </section>
 
   <footer class="foot">
-    <span>NOMO-QQBot · Cloudflare Workers</span>
+    <span>${esc(title)} · Cloudflare Workers</span>
     <span class="sp"></span>
-    <a href="https://github.com/MN-LKs/NOMO-QQBot" target="_blank" rel="noopener">GitHub</a>
+    <a href="${esc(github)}" target="_blank" rel="noopener" style="display:${showGithub ? 'inline' : 'none'}">GitHub</a>
     <a href="/administrator">管理面板</a>
   </footer>
 </div>

@@ -8,10 +8,14 @@ import { chunkText, stripMention, toPlainText, truncate, clipMiddle } from '../s
 import { calc, formatNumber } from '../src/util/calc.js';
 import { handleFrame, wsStatus, wsClose } from '../src/qq/gateway.js';
 import { panelPage, loginPage, lockedPage } from '../src/panel/ui.js';
+import { homePage } from '../src/panel/home.js';
 import { seoEnhance } from '../src/util/seo.js';
 import { collectDocTargets, stripDocs } from '../tools/strip-docs.js';
 import { BUILTIN_EXTS, enabledToolSet, safeToolName, externalToolDefs } from '../src/agent/exts.js';
 import { pickSkills, parseSkillDoc, parseTriggers } from '../src/agent/skills.js';
+import { parseMotdTarget, formatMotdText } from '../src/agent/motd.js';
+import { normaliseEvent } from '../src/qq/webhook.js';
+import { buildMenuText, buildHelpMarkdown } from '../src/agent/prompt.js';
 import { resolveStores, availability } from '../src/store/storage.js';
 import { uriEncode, sha256Hex } from '../src/store/s3.js';
 import { execFileSync } from 'node:child_process';
@@ -49,6 +53,8 @@ const env1 = { ADMIN_USER: 'admin', ADMIN_PASS: 'pw12345678' };
 const cfg1 = flatten(DEFAULT_SETTINGS, env1);
 eq('默认连接方式是 webhook', cfg1.mode, 'webhook');
 eq('可以切回 websocket', flatten(deepMerge(DEFAULT_SETTINGS, { qq: { mode: 'websocket' } }), env1).mode, 'websocket');
+eq('图片识别默认关闭', flatten(DEFAULT_SETTINGS, env1).visionEnabled, false);
+eq('图片识别可以开启', flatten(deepMerge(DEFAULT_SETTINGS, { agent: { vision: true } }), env1).visionEnabled, true);
 eq('默认模型', cfg1.llmModel, 'deepseek-v4.1-flash');
 eq('默认最多 5 个项目', cfg1.maxSites, 5);
 eq('默认存活 600 秒', cfg1.siteTtlSeconds, 600);
@@ -66,6 +72,30 @@ eq('缺环境变量', missingEnv({}), ['ADMIN_USER', 'ADMIN_PASS']);
 eq('空白管理员变量也算缺失', missingEnv({ ADMIN_USER: '   ', ADMIN_PASS: '' }), ['ADMIN_USER', 'ADMIN_PASS']);
 eq('缺 D1/KV 的提示', missingStorage({}), ['D1 数据库(DB)', 'KV 命名空间(STORE)']);
 eq('只缺 KV 的提示', missingStorage({ DB: {} }), ['KV 命名空间(STORE)']);
+eq('MOTD 解析域名', parseMotdTarget('play.hypixel.net'), { host: 'play.hypixel.net', port: '' });
+eq('MOTD 解析端口', parseMotdTarget('play.example.com:25565'), { host: 'play.example.com', port: '25565' });
+ok('MOTD 拒绝空地址', !!parseMotdTarget('').error);
+ok('MOTD 拒绝坏端口', !!parseMotdTarget('x.example.com:99999').error);
+ok('MOTD 文本包含人数', formatMotdText({ ok: true, online: true, host: 'a:1', type: 'Java', motd: 'Hi', version: '1.21', players: { online: 2, max: 10 }, delay: 30 }).includes('2 / 10'));
+{
+  const ev = normaliseEvent({
+    t: 'GROUP_AT_MESSAGE_CREATE',
+    d: {
+      id: 'm1', content: '看看这个', group_openid: 'g1',
+      author: { member_openid: 'u1', nickname: '小明' },
+      attachments: [{ content_type: 'image/png', url: 'https://example.com/a.png' }],
+      msg_elements: [
+        { message_type: 103, content: '被引用的内容', author: { nickname: '小红' } },
+        { message_type: 102, content: '聊天记录', msg_elements: [{ message_type: 0, content: '第一句' }] },
+      ],
+    },
+  });
+  eq('事件解析出附件', ev.attachments.length, 1);
+  eq('事件解析出引用元素', ev.msgElements[0].message_type, 103);
+  ok('事件解析出引用作者', ev.msgElements[0].author.nickname === '小红');
+}
+ok('菜单包含状态指令', buildMenuText({ canDeploy: true, motdEnabled: true }, { markdown: true }).includes('/状态'));
+ok('帮助 Markdown 有标题', buildHelpMarkdown({ canDeploy: false, motdEnabled: true }).includes('## '));
 {
   const toml = fs.readFileSync(path.join(ROOT, 'wrangler.toml'), 'utf8');
   ok('wrangler.toml 开启 keep_vars', /^keep_vars\s*=\s*true/m.test(toml));
@@ -285,7 +315,7 @@ function fakeCore() {
   core.onJoin = async (t) => { joined = t; };
   await handleFrame(core, { op: 0, t: 'GROUP_ADD_ROBOT', d: { group_openid: 'g9' } });
   eq('加群事件入队欢迎语', core.queue.length, 1);
-  eq('欢迎语是帮助文本', core.queue[0].text, '/帮助');
+  eq('欢迎语是菜单', core.queue[0].text, '/菜单');
   ok('加群事件触发 onJoin', joined && joined.targetId === 'g9');
 }
 {
@@ -316,7 +346,10 @@ function extractScripts(html) {
   eq('面板 HTML 只有一个结束标签', (panel.match(/<\/script>/g) || []).length, 1);
   ok('正则里的反斜杠没有被模板字符串吃掉', extractScripts(panel).includes('/^#\\/?/'));
   ok('换行转义还在', extractScripts(panel).includes("join('\\n')"));
-  for (const [name, code] of [['panel', extractScripts(panel)], ['login', extractScripts(loginPage({}))]]) {
+  const v2 = panelPage({ user: 'admin', version: 'v2', accent: 'purple' });
+  ok('V2 面板带 body 类名与主题色', v2.includes('<body class="v2" data-accent="purple">'));
+  ok('V2 面板包含玻璃样式', v2.includes('body.v2') && v2.includes('backdrop-filter:blur(24px)'));
+  for (const [name, code] of [['panel', extractScripts(panel)], ['v2', extractScripts(v2)], ['login', extractScripts(loginPage({}))]]) {
     const f = `/tmp/nomo-ui-${name}.js`;
     fs.writeFileSync(f, code);
     try {
@@ -326,6 +359,16 @@ function extractScripts(html) {
       fails.push(`前端脚本 ${name} 语法错误:${String(e.stderr || e.message).slice(0, 200)}`);
     }
   }
+}
+
+{
+  const res = homePage({ ui: { homepage: { title: '测试站', description: '测试介绍', github: 'https://example.com/repo' } } });
+  const html = await res.text();
+  ok('首页读取配置标题', html.includes('测试站'));
+  ok('首页读取配置介绍', html.includes('测试介绍'));
+  ok('首页读取 GitHub 地址', html.includes('https://example.com/repo'));
+  const off = homePage({ ui: { homepage: { enabled: false } } });
+  eq('首页可关闭', off.status, 404);
 }
 
 // ---------- 面板锁定 / SEO 兜底 / 描述文件清理 ----------

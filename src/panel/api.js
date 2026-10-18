@@ -9,12 +9,13 @@ import { all, ensureSchema, one, run } from '../store/db.js';
 import { listMcp, addMcp, updateMcp, removeMcp, testMcp } from '../agent/mcp.js';
 import { testSearch } from '../agent/search.js';
 import { chatOnce } from '../agent/llm.js';
-import { status as storageStatus, availability, resolveStores, scanStore } from '../store/storage.js';
+import { status as storageStatus, availability, resolveStores, scanStore, storeDetail, readStoreFile, writeStoreFile, deleteStoreFile } from '../store/storage.js';
 import { S3Client } from '../store/s3.js';
 import { listModules, getModule, saveModule, removeModule } from '../store/modules.js';
 import { listSkills, saveSkill, removeSkill, parseSkillDoc } from '../agent/skills.js';
 import { loadExts, saveExt, removeExt } from '../agent/exts.js';
 import { execBackend, sandboxFetch } from '../core/backend.js';
+import { parseMotdTarget, queryMotd, formatMotdText } from '../agent/motd.js';
 import { enhanceFiles } from '../util/seo.js';
 
 const JSON_H = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
@@ -237,6 +238,14 @@ export async function handlePanelApi(request, env, url, ctx) {
       return jsonRes({ ok: true, result: out });
     }
 
+    if (path === '/test-motd' && method === 'POST') {
+      const target = parseMotdTarget(body?.host);
+      if (target.error) return jsonRes({ error: target.error }, 400);
+      const cfg = await loadCfg(env);
+      const r = await queryMotd(cfg, target.host, target.port || String(body?.port || ''));
+      return jsonRes({ ok: r.ok, result: r, text: formatMotdText(r) });
+    }
+
     if (seg[0] === 'projects') {
       return await projectsApi(request, env, url, seg, method, body);
     }
@@ -250,7 +259,7 @@ export async function handlePanelApi(request, env, url, ctx) {
     }
 
     if (seg[0] === 'storage') {
-      return await storageApi(env, seg, method, body);
+      return await storageApi(env, seg, method, body, url);
     }
 
     if (seg[0] === 'modules') {
@@ -482,12 +491,65 @@ async function mcpApi(env, seg, method, body) {
   return jsonRes({ error: 'not found' }, 404);
 }
 
-async function storageApi(env, seg, method, body) {
+async function storageApi(env, seg, method, body, url) {
   const settings = await getRaw(env, { fresh: true });
   const stores = Array.isArray(settings.storage?.stores) ? [...settings.storage.stores] : [];
 
   if (seg.length === 1 && method === 'GET') {
     return jsonRes({ status: await storageStatus(env) });
+  }
+
+  // 存储详情:基本信息 + 文件列表
+  if (seg.length === 2 && method === 'GET') {
+    const prefix = String(url?.searchParams?.get('prefix') || '');
+    const cursor = String(url?.searchParams?.get('cursor') || '') || undefined;
+    const limit = Math.max(1, Math.min(500, Number(url?.searchParams?.get('limit')) || 100));
+    const r = await storeDetail(env, seg[1], { prefix, cursor, limit });
+    if (r.error) return jsonRes({ error: r.error }, 404);
+    return jsonRes(r);
+  }
+
+  if (seg.length === 3 && seg[2] === 'files' && method === 'GET') {
+    const prefix = String(url?.searchParams?.get('prefix') || '');
+    const cursor = String(url?.searchParams?.get('cursor') || '') || undefined;
+    const limit = Math.max(1, Math.min(500, Number(url?.searchParams?.get('limit')) || 100));
+    const r = await storeDetail(env, seg[1], { prefix, cursor, limit });
+    if (r.error) return jsonRes({ error: r.error }, 404);
+    return jsonRes(r);
+  }
+
+  if (seg.length === 3 && seg[2] === 'file') {
+    const key = String(body?.path || url?.searchParams?.get('path') || '').trim();
+    if (method === 'GET') {
+      const r = await readStoreFile(env, seg[1], key);
+      if (r.error) return jsonRes({ error: r.error }, 404);
+      const name = key.split('/').pop() || key;
+      const ct = mimeFor(name) || 'application/octet-stream';
+      const textLike = /\.(html?|css|js|mjs|json|txt|md|markdown|xml|svg|csv|ya?ml|toml|ini|log)$/i.test(name)
+        || ct.startsWith('text/') || ct.includes('json') || ct.includes('javascript') || ct.includes('xml');
+      if (textLike) {
+        return jsonRes({ kind: 'text', key, size: r.bytes.length, ct, text: new TextDecoder('utf-8').decode(r.bytes) });
+      }
+      return jsonRes({ kind: 'base64', key, size: r.bytes.length, ct, data: b64(r.bytes) });
+    }
+    if (method === 'POST' || method === 'PUT') {
+      const encoding = body?.encoding === 'base64' ? 'base64' : 'text';
+      let bytes;
+      try {
+        bytes = encoding === 'base64' ? unb64(String(body?.content || '')) : new TextEncoder().encode(String(body?.content || ''));
+      } catch {
+        return jsonRes({ error: '文件内容不是合法的 base64' }, 400);
+      }
+      const ct = String(body?.contentType || mimeFor(key) || 'text/plain');
+      const r = await writeStoreFile(env, seg[1], key, bytes, ct);
+      if (r.error) return jsonRes({ error: r.error }, 400);
+      return jsonRes(r);
+    }
+    if (method === 'DELETE') {
+      const r = await deleteStoreFile(env, seg[1], key);
+      if (r.error) return jsonRes({ error: r.error }, 400);
+      return jsonRes(r);
+    }
   }
 
   if (seg.length === 2 && seg[1] === 'save' && method === 'POST') {
@@ -546,9 +608,9 @@ async function storageApi(env, seg, method, body) {
     const id = String(body?.id || '');
     const s = resolveStores(settings, env).find((x) => x.id === id);
     if (!s) return jsonRes({ error: '存储不存在' }, 404);
-    const r = await scanStore(env, s);
+    const r = await scanStore(env, s, { prefix: String(body?.prefix || '') });
     if (r.error) return jsonRes({ error: r.error }, 400);
-    return jsonRes({ ok: true, bytes: r.bytes, files: r.files });
+    return jsonRes({ ok: true, bytes: r.bytes, files: r.files, providerMaxBytes: r.providerMaxBytes });
   }
 
   if (seg.length === 2 && seg[1] === 'cache' && method === 'POST') {
@@ -717,6 +779,13 @@ function b64(bytes) {
     s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
   }
   return btoa(s);
+}
+
+function unb64(text) {
+  const bin = atob(String(text || ''));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function pickId(env, settings) {

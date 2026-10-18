@@ -54,4 +54,16 @@ export const SCHEMA = [
      ts         INTEGER NOT NULL
    )`,
   `CREATE INDEX IF NOT EXISTS idx_gmsg_group ON gmsg(group_id, ts)`,
+
+  `CREATE TABLE IF NOT EXISTS pending (
+     token       TEXT PRIMARY KEY,
+     payload     TEXT NOT NULL,
+     conv_id     TEXT,
+     target_id   TEXT,
+     scene       TEXT,
+     msg_id      TEXT,
+     created_at  INTEGER NOT NULL,
+     expires_at  INTEGER NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_exp ON pending(expires_at)`,
 ];

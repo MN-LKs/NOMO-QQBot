@@ -6,10 +6,12 @@ import * as P from '../store/projects.js';
 import { getFile, mimeFor } from '../store/kvfile.js';
 import { chunkText, stripMention, toPlainText, truncate } from '../util/text.js';
 import { enhanceFiles } from '../util/seo.js';
-import { fetchAccessToken, deliver } from '../qq/api.js';
+import { fetchAccessToken, deliver, deliverMedia, muteGroupMember, unmuteGroupMember, explainError } from '../qq/api.js';
 import { runAgent } from '../agent/loop.js';
-import { buildCompressPrompt, buildHelpText } from '../agent/prompt.js';
+import { buildCompressPrompt, buildHelpText, buildHelpMarkdown, buildMenuText } from '../agent/prompt.js';
 import { chatWithFallback } from '../agent/llm.js';
+import { parseMotdTarget, queryMotd, formatMotdText, fetchMotdImage } from '../agent/motd.js';
+import { imageToDataUrl, attachmentKind, describeAttachments } from '../qq/media.js';
 import { wsStart, wsClose, wsEnsure, wsStatus } from '../qq/gateway.js';
 import { isReservedPath, genSiteId } from '../util/id.js';
 
@@ -66,6 +68,10 @@ export class BotCore {
           return json({ ok: true });
         case '/site/list':
           return json({ sites: await this.listSites() });
+        case '/pending/get':
+          return json(await this.getPending(body?.token));
+        case '/pending/resolve':
+          return json(await this.resolvePending(body?.token, !!body?.approve));
         case '/site/get':
           return json(await this.getSite(String(body?.id || '')));
         case '/site/delete':
@@ -227,13 +233,15 @@ Object.assign(BotCore.prototype, {
     const convId = p.convId;
     const rawText = String(p.text || '').trim();
     const text = stripMention(rawText);
+    const incoming = incomingContext(p);
     // QQ 的 GROUP_MESSAGE_CREATE(全量接收)即使 @了机器人,mentioned 也可能是 false。
     // 只要原文里出现了 <@...>,就按"被 @"处理,否则 /帮助、@我 说话都会被静默丢掉。
     const hadMention = rawText !== text;
     const mentioned = p.mentioned !== false || hadMention;
     const log = (m, lv = 'info') => logWrite(this.env, lv, 'chat', m);
 
-    log(`[收到] ${p.scene} ${p.nickname || p.userId || ''} type=${p.type || '?'} mentioned=${mentioned} :: ${truncate(text, 120)}`);
+    log(`[收到] ${p.scene} ${p.nickname || p.userId || ''} type=${p.type || '?'} mentioned=${mentioned} :: ${truncate(text, 120)}`
+      + (incoming.attachments ? ` ${incoming.attachments}` : '') + (incoming.quote ? ' [带引用]' : ''));
 
     // 群消息缓存(group_recent / group_find 用):全量接收模式下,没 @机器人 的消息也存下来
     if (p.scene === 'group' && p.targetId && p.mentioned !== undefined && cfg.groupsCacheEnabled) {
@@ -277,7 +285,7 @@ Object.assign(BotCore.prototype, {
         `· 你的 openID:${p.userId || '(未知)'}`,
         p.scene === 'group' ? `· 群聊 openID:${p.targetId}` : '· 当前是单聊',
         `· 会话 ID:${convId}`,
-        `· 身份:${this.isAdmin(cfg, p) ? '管理员' : '普通成员'}`,
+        `· 身份:${this.isAdmin(cfg, p) ? '管理员' : '普通成员'}${p.scene === 'group' ? ` · 群角色:${p.memberRole || 'member'}` : ''}`,
         '',
         '把 openID 复制到管理面板的「设置 → 群聊权限 / 管理员」里就能授权。',
       ];
@@ -285,8 +293,12 @@ Object.assign(BotCore.prototype, {
       return;
     }
 
-    if (cmd.name === 'help' || (!text && !cmd.name)) {
-      await this.reply(p, buildHelpText(cfg));
+    if (cmd.name === 'help' || cmd.name === 'menu' || (!text && !cmd.name && !incoming.attachments)) {
+      const isMenu = cmd.name === 'menu' || (!text && !cmd.name);
+      const content = isMenu
+        ? buildMenuText(cfg, { markdown: cfg.markdownEnabled })
+        : (cfg.markdownEnabled ? buildHelpMarkdown(cfg) : buildHelpText(cfg));
+      await this.reply(p, content, { markdown: cfg.markdownEnabled });
       return;
     }
     if (cmd.name === 'delete' || cmd.name === 'clear' || cmd.name === 'reset') {
@@ -322,6 +334,18 @@ Object.assign(BotCore.prototype, {
       ].join('\n'));
       return;
     }
+    if (cmd.name === 'motd') {
+      await this.handleMotd(p, cmd.args, cfg);
+      return;
+    }
+    if (cmd.name === 'mute' || cmd.name === 'unmute' || cmd.name === 'kick') {
+      await this.handleAdminAction(p, cmd.name, cmd.args, cfg);
+      return;
+    }
+    if (cmd.name === 'confirm' || cmd.name === 'cancel') {
+      await this.handleDeployConfirm(p, cmd.name, cmd.args, cfg);
+      return;
+    }
 
     let body = cmd.name === 'ai' ? cmd.args : text;
     if (cmd.name !== 'ai') {
@@ -329,8 +353,9 @@ Object.assign(BotCore.prototype, {
       const stripped = parseAiPrefix(text);
       if (stripped !== null) body = stripped;
     }
+    if (!body && incoming.attachments) body = '请看看我发的内容。';
     if (!body) {
-      await this.reply(p, buildHelpText(cfg));
+      await this.reply(p, buildMenuText(cfg, { markdown: cfg.markdownEnabled }), { markdown: cfg.markdownEnabled });
       return;
     }
 
@@ -354,24 +379,61 @@ Object.assign(BotCore.prototype, {
       await this.reply(p, '🤖 Agent 正在运行,请稍等…', { mode: 'passive' });
     }
     const started = Date.now();
+    let chatHistory = incoming.history;
+    if (p.scene === 'group' && p.targetId && cfg.groupsCacheEnabled) {
+      try {
+        const recent = await this.groupRecent(p.targetId, 10, convId);
+        if (recent && !recent.startsWith('这个群还没有')) {
+          chatHistory = [recent, chatHistory].filter(Boolean).join('\n');
+        }
+      } catch {
+        /* 群缓存读不到不影响主流程 */
+      }
+    }
+    const images = [];
+    if (cfg.visionEnabled) {
+      for (const a of Array.isArray(p.attachments) ? p.attachments : []) {
+        if (attachmentKind(a) !== '图片' || !a.url) continue;
+        if (images.length >= 2) break;
+        try {
+          images.push(await imageToDataUrl(a.url, { timeoutMs: 15000, maxBytes: 4 * 1024 * 1024 }));
+        } catch (e) {
+          log(`[图片] 下载失败:${e?.message || e}`, 'warn');
+        }
+      }
+      if (images.length) log(`[图片] 已读取 ${images.length} 张,将随消息一起发给模型`);
+    } else if (incoming.attachments) {
+      log('[图片] 图片识别未开启,只把附件名称带进上下文', 'info');
+    }
 
     const result = await runAgent({
       cfg,
       core: this,
       convId,
       userText: body,
-      meta: { botName: 'NOMO', nickname: p.nickname },
+      images,
+      meta: {
+        botName: 'NOMO',
+        nickname: p.nickname,
+        p,
+        quote: incoming.quote,
+        chatHistory,
+        attachments: incoming.attachments,
+        hasImage: images.length > 0,
+        markdown: cfg.markdownEnabled,
+      },
       log,
     });
 
     const plain = toPlainText(result.reply);
+    const outgoing = cfg.markdownEnabled ? String(result.reply || '').trim() : plain;
     // 投递策略:auto = 被动窗口内用被动回复,超窗自动改用主动消息;active = 始终主动
     const answerMode = cfg.answerDelivery === 'active' ? 'active' : (overWindow() ? 'active' : 'passive');
-    const delivered = await this.reply(p, plain, { mode: answerMode });
+    const delivered = await this.reply(p, outgoing, { mode: answerMode, markdown: cfg.markdownEnabled });
     log(`[投递] 方式=${delivered.mode} 条数=${delivered.sent.length}`);
 
     this.appendMessages(convId, [
-      { role: 'user', content: truncate(body, 1500) },
+      { role: 'user', content: truncate([body, incoming.attachments, incoming.quote ? `[引用] ${incoming.quote}` : ''].filter(Boolean).join('\n'), 1500) },
       { role: 'assistant', content: truncate(plain, 2500) },
     ]);
     this.trimContext(convId);
@@ -390,6 +452,8 @@ Object.assign(BotCore.prototype, {
   isAdmin(cfg, p) {
     const admins = cfg.settings.admin.openIds || [];
     if (admins.some((a) => a.openid === p.userId)) return true;
+    if (cfg.settings.admin.groupAdmins && p.scene === 'group'
+      && (p.memberRole === 'admin' || p.memberRole === 'owner')) return true;
     return false;
   },
 
@@ -416,16 +480,16 @@ Object.assign(BotCore.prototype, {
   },
 
   async reply(p, text, opts = {}) {
-    const first = await this.deliverOnce(p, text, opts.mode);
+    const first = await this.deliverOnce(p, text, opts.mode, opts);
     if (first.sent.length) return first;
     const other = opts.mode === 'active' ? 'passive' : 'active';
     await logWrite(this.env, 'warn', 'send', `${opts.mode || 'passive'} 一条都没发出去,改用 ${other} 重试`);
-    const second = await this.deliverOnce(p, text, other);
+    const second = await this.deliverOnce(p, text, other, opts);
     await bump(this.env, `delivery_fallback_${other}`, 1).catch(() => null);
     return second;
   },
 
-  async deliverOnce(p, text, mode = 'passive') {
+  async deliverOnce(p, text, mode = 'passive', opts = {}) {
     const cfg = await this.cfg();
     const token = await this.getToken();
     // 条数上限:QQ 同一条消息最多回复 4~5 次(单聊 4 / 群聊 5),回执已经用掉 1 次,这里留够余量
@@ -438,6 +502,7 @@ Object.assign(BotCore.prototype, {
       mode,
       msgId: p.messageId,
       msgSeqStart: this.nextSeq(p),
+      markdown: opts.markdown === true && cfg.markdownEnabled === true,
     });
     if (r.errors.length) await logWrite(this.env, 'warn', 'send', `发送错误:${r.errors.join(' | ')}`);
     await bump(this.env, mode === 'active' ? 'messages_active' : 'messages_passive', r.sent.length).catch(() => null);
@@ -584,6 +649,77 @@ Object.assign(BotCore.prototype, {
       leftSeconds: Math.max(0, Math.round((Number(p.expires_at) - Date.now()) / 1000)),
       files: out,
     };
+  },
+
+  async createPendingDeploy({ name, description, files, owner }, p = null) {
+    const cfg = await this.cfg();
+    const token = genId('ascii', 16);
+    const now = Date.now();
+    const expiresAt = now + 10 * 60 * 1000;
+    const payload = { name, description, files, owner };
+    this.sql.exec(
+      'INSERT INTO pending (token, payload, conv_id, target_id, scene, msg_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      token, JSON.stringify(payload), p?.convId || '', p?.targetId || '', p?.scene || '', p?.messageId || '', now, expiresAt,
+    );
+    const base = String(cfg.publicBaseUrl || '').replace(/\/$/, '');
+    return {
+      token,
+      url: base ? `${base}/confirm/${token}` : '',
+      expiresAt,
+      fallback: `/确认 ${token}`,
+    };
+  },
+
+  async getPending(token) {
+    const t = String(token || '').trim();
+    if (!t) return null;
+    const rows = this.sql.exec('SELECT * FROM pending WHERE token = ?', t).toArray();
+    if (!rows.length) return null;
+    const row = rows[0];
+    if (Number(row.expires_at) < Date.now()) {
+      this.sql.exec('DELETE FROM pending WHERE token = ?', t);
+      return null;
+    }
+    let payload = {};
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      payload = {};
+    }
+    return { ...row, payload };
+  },
+
+  async resolvePending(token, approve, { notify = true } = {}) {
+    const row = await this.getPending(token);
+    if (!row) return { error: '确认链接已过期或已经处理过了' };
+    this.sql.exec('DELETE FROM pending WHERE token = ?', row.token);
+    if (!approve) {
+      if (notify) await this.notifyPending(row, '已取消这次部署。');
+      return { ok: true, canceled: true };
+    }
+    const r = await this.createSite(row.payload);
+    if (r.error) {
+      if (notify) await this.notifyPending(row, `部署失败:${r.error}`);
+      return { error: r.error };
+    }
+    if (notify) await this.notifyPending(row, `部署成功:${r.url}\n项目:${r.name}\n存活 ${r.ttlMinutes} 分钟。`);
+    return { ok: true, site: r };
+  },
+
+  async notifyPending(row, text) {
+    if (!row?.target_id || !row?.scene) return;
+    const p = {
+      scene: row.scene,
+      targetId: row.target_id,
+      messageId: row.msg_id,
+      convId: row.conv_id,
+      nickname: '系统',
+    };
+    try {
+      await this.reply(p, text, { mode: 'passive' });
+    } catch {
+      /* 通知失败不影响确认结果 */
+    }
   },
 
   async createSite({ name, description, files, owner }) {
@@ -796,6 +932,110 @@ Object.assign(BotCore.prototype, {
     return ['找到这些群:', ...list.map((g) => `· ${g.name || '(未命名)'} | openID=${g.openid} | 消息 ${Number(g.msg_count || 0)} 条 | 最近活跃 ${ago(g.last_seen)}`)].join('\n');
   },
 
+  async handleMotd(p, args, cfg) {
+    if (cfg.motdEnabled === false) {
+      await this.reply(p, 'MOTD 查询已在面板关闭。');
+      return;
+    }
+    const t = parseMotdTarget(args);
+    if (t.error) {
+      await this.reply(p, t.error);
+      return;
+    }
+    const r = await queryMotd(cfg, t.host, t.port);
+    const text = formatMotdText(r);
+    if (r.ok && r.online && cfg.motdImageEnabled && cfg.motdImageApi) {
+      const img = await fetchMotdImage(cfg, t.host, t.port);
+      if (img) {
+        try {
+          if (!cfg.publicBaseUrl || !this.env.STORE) {
+            await logWrite(this.env, 'warn', 'motd', '图片已获取,但缺少公开站点域名或 KV,改为只发文字');
+          } else {
+            const ext = img.contentType.includes('png') ? 'png'
+              : img.contentType.includes('gif') ? 'gif'
+                : img.contentType.includes('webp') ? 'webp' : 'jpg';
+            const key = `motd_${genId('ascii', 12)}.${ext}`;
+            await this.env.STORE.put(`media/${key}`, img.bytes, { expirationTtl: 900 });
+            const publicUrl = `${cfg.publicBaseUrl.replace(/\/$/, '')}/media/${key}`;
+            const token = await this.getToken();
+            const target = p.scene === 'c2c' ? { kind: 'c2c', id: p.targetId } : { kind: 'group', id: p.targetId };
+            const sent = await deliverMedia(cfg, token, target, {
+              url: publicUrl, contentType: img.contentType, fileType: 1,
+            }, {
+              mode: 'passive', msgId: p.messageId, msgSeq: this.nextSeq(p),
+            });
+            if (sent.ok) {
+              await this.reply(p, text, { mode: 'passive' });
+              return;
+            }
+            await logWrite(this.env, 'warn', 'motd', `图片发送失败:${sent.error || 'unknown'}`);
+          }
+        } catch (e) {
+          await logWrite(this.env, 'warn', 'motd', `图片发送异常:${e?.message || e}`);
+        }
+      }
+    }
+    await this.reply(p, text);
+  },
+
+  async handleDeployConfirm(p, action, args, cfg) {
+    if (!this.isAdmin(cfg, p)) {
+      await this.reply(p, '只有面板里配置的管理员才能确认部署。');
+      return;
+    }
+    const token = String(args || '').trim().split(/\s+/)[0];
+    if (!token) {
+      await this.reply(p, `用法:/确认 ${action === 'cancel' ? '或 /取消部署 ' : ''}<token>`);
+      return;
+    }
+    const r = await this.resolvePending(token, action === 'confirm', { notify: false });
+    if (r.error) {
+      await this.reply(p, r.error);
+      return;
+    }
+    if (r.canceled) {
+      await this.reply(p, '已取消这次部署。');
+      return;
+    }
+    await this.reply(p, `部署成功 ✅\n项目:${r.site.name}\n链接:${r.site.url}\n存活 ${r.site.ttlMinutes} 分钟。`);
+  },
+
+  async handleAdminAction(p, action, args, cfg) {
+    if (p.scene !== 'group') {
+      await this.reply(p, '这个操作只能在群里使用。');
+      return;
+    }
+    if (!this.isAdmin(cfg, p)) {
+      await this.reply(p, '只有面板里配置的管理员才能使用这个操作。');
+      return;
+    }
+    if (action === 'kick') {
+      await this.reply(p, 'QQ 群机器人接口目前没有开放「踢人」,请在 QQ 群里手动移出成员。');
+      return;
+    }
+    const m = String(args || '').match(/<@!?([^>]+)>/);
+    const target = m ? m[1] : String(args || '').split(/\s+/)[0];
+    if (!target) {
+      await this.reply(p, '用法:/禁言 @某人 10(分钟) 或 /解禁 @某人');
+      return;
+    }
+    const minMatch = String(args || '').match(/(\d+)\s*(分钟|分|min)?/i);
+    const mins = Math.max(1, Math.min(30 * 24 * 60, Number(minMatch?.[1]) || 10));
+    try {
+      const token = await this.getToken();
+      const r = action === 'unmute'
+        ? await unmuteGroupMember(cfg, token, p.targetId, target)
+        : await muteGroupMember(cfg, token, p.targetId, target, mins * 60);
+      if (!r.ok) {
+        await this.reply(p, `操作失败:${explainError(r.data)}`);
+        return;
+      }
+      await this.reply(p, action === 'unmute' ? '已解除禁言。' : `已禁言 ${mins} 分钟。`);
+    } catch (e) {
+      await this.reply(p, `操作失败:${e?.message || e}`);
+    }
+  },
+
   async status() {
     const cfg = await this.cfg();
     const sites = await P.listProjects(this.env).catch(() => []);
@@ -821,11 +1061,14 @@ function parseCommand(text) {
   const args = (m?.[2] || '').trim();
   const map = {
     ai: 'ai', a: 'ai', ask: 'ai', 问: 'ai',
-    帮助: 'help', help: 'help', 菜单: 'help', 指令: 'help', '?': 'help',
+    帮助: 'help', help: 'help', 菜单: 'menu', 指令: 'menu', '?': 'help', menu: 'menu',
     delete: 'delete', clear: 'delete', reset: 'delete', 清空: 'delete', 重置: 'delete',
     压缩: 'compress', compress: 'compress', 总结: 'compress', compact: 'compress',
     记忆: 'memory', memory: 'memory', 记住: 'memory',
     状态: 'status', status: 'status',
+    motd: 'motd', 服务器: 'motd', 查服务器: 'motd', 服务器状态: 'motd',
+    禁言: 'mute', mute: 'mute', 解禁: 'unmute', unmute: 'unmute', 踢人: 'kick', kick: 'kick',
+    确认: 'confirm', 确认部署: 'confirm', confirm: 'confirm', 取消部署: 'cancel',
     查信息: 'info', info: 'info', whoami: 'info', 我的信息: 'info', 查id: 'info',
   };
   return { name: map[raw] || '', args };
@@ -843,9 +1086,44 @@ function parseAiPrefix(text) {
 function genId(charset = 'ascii', len = 8) {
   for (let i = 0; i < 20; i++) {
     const s = genSiteId(len, charset);
-    if (!isReservedPath(s)) return s;
+    if (s && !isReservedPath(s)) return s;
   }
-  return `p${Date.now().toString(36)}`;
+  return Math.random().toString(36).slice(2, 2 + len).padEnd(len, '0');
+}
+
+function flattenElements(elements, depth = 0) {
+  const out = [];
+  for (const el of Array.isArray(elements) ? elements : []) {
+    const type = Number(el?.message_type) || 0;
+    const tag = type === 103 ? '引用' : type === 102 ? '聊天记录' : type === 3 ? '卡片' : '';
+    const who = el?.author?.nickname || el?.author?.username || el?.author?.member_openid || '';
+    const content = String(el?.content || '').trim();
+    if (tag || content) out.push(`${'  '.repeat(depth)}${tag ? `[${tag}] ` : ''}${who ? `${who}:` : ''}${content}`);
+    if (Array.isArray(el?.attachments) && el.attachments.length) out.push(`${'  '.repeat(depth)}${describeAttachments(el.attachments)}`);
+    if (Array.isArray(el?.msg_elements) && el.msg_elements.length) out.push(...flattenElements(el.msg_elements, depth + 1));
+  }
+  return out.filter(Boolean);
+}
+
+function findElement(elements, type) {
+  for (const el of Array.isArray(elements) ? elements : []) {
+    if (Number(el?.message_type) === type) return el;
+    if (Array.isArray(el?.msg_elements)) {
+      const found = findElement(el.msg_elements, type);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function incomingContext(p) {
+  const elements = Array.isArray(p?.msgElements) ? p.msgElements : [];
+  const quoteEl = findElement(elements, 103);
+  const historyEl = findElement(elements, 102);
+  const quote = quoteEl ? flattenElements([quoteEl]).join('\n').slice(0, 2000) : '';
+  const history = historyEl ? flattenElements([historyEl]).join('\n').slice(0, 3000) : '';
+  const attachments = describeAttachments(p?.attachments);
+  return { quote, history, attachments };
 }
 
 function json(obj, status = 200) {

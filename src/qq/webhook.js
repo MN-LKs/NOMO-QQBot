@@ -32,6 +32,26 @@ function textOf(d) {
   return String(d?.content || '').trim();
 }
 
+function collectAttachments(elements, out = []) {
+  for (const el of Array.isArray(elements) ? elements : []) {
+    for (const a of Array.isArray(el?.attachments) ? el.attachments : []) out.push(a);
+    if (Array.isArray(el?.msg_elements)) collectAttachments(el.msg_elements, out);
+  }
+  return out;
+}
+
+function dedupeAttachments(list) {
+  const seen = new Set();
+  const out = [];
+  for (const a of Array.isArray(list) ? list : []) {
+    const key = String(a?.url || a?.filename || JSON.stringify(a || {}));
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(a);
+  }
+  return out;
+}
+
 export function normaliseEvent(payload) {
   const t = payload?.t;
   const d = payload?.d || {};
@@ -42,6 +62,11 @@ export function normaliseEvent(payload) {
     const groupId = d.group_openid;
     const userId = d.author?.user_openid || d.author?.member_openid || d.author?.id;
     const openId = d.author?.user_openid || d.author?.member_openid;
+    const elements = Array.isArray(d.msg_elements) ? d.msg_elements : [];
+    const attachments = dedupeAttachments([
+      ...(Array.isArray(d.attachments) ? d.attachments : []),
+      ...collectAttachments(elements),
+    ]);
     return {
       ...base,
       kind: 'message',
@@ -54,7 +79,14 @@ export function normaliseEvent(payload) {
       messageId: d.id,
       userId: isC2C ? openId : userId,
       nickname: d.author?.nickname || d.author?.username || '',
+      memberRole: d.author?.member_role || '',
       text: textOf(d),
+      attachments,
+      msgElements: elements,
+      messageType: d.message_type,
+      messageScene: d.message_scene,
+      mentions: Array.isArray(d.mentions) ? d.mentions : [],
+      arkData: d.ark_data || null,
     };
   }
 
@@ -68,7 +100,7 @@ export function normaliseEvent(payload) {
       messageId: d.event_id || d.id,
       userId: d.op_member_openid,
       nickname: '',
-      text: '/帮助',
+      text: '/菜单',
     };
   }
 
@@ -82,7 +114,7 @@ export function normaliseEvent(payload) {
       messageId: d.event_id || d.id,
       userId: d.openid,
       nickname: '',
-      text: '/帮助',
+      text: '/菜单',
     };
   }
 

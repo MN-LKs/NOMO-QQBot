@@ -109,7 +109,7 @@ export function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-export function panelPage({ user = '' } = {}) {
+export function panelPage({ user = '', version = 'v1', accent = 'blue' } = {}) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -241,9 +241,79 @@ font-family:ui-monospace,Menlo,Consolas,monospace;align-items:flex-start}
  .wrap{padding:14px}
 }
 .burger{display:none;border:1px solid var(--line);background:#fff;border-radius:7px;padding:6px 10px;cursor:pointer}
+/* ---------- V2:浮动玻璃面板 ---------- */
+body.v2{--bg:#eef2ff;--card:rgba(255,255,255,.68);--line:rgba(15,23,42,.08);--txt:#0f172a;--dim:#64748b;--pri:#4f46e5;--ok:#059669;--warn:#d97706;--bad:#dc2626;
+ background:
+  radial-gradient(1200px 800px at 0% 0%,#dbeafe 0%,transparent 55%),
+  radial-gradient(1000px 700px at 100% 8%,#f3e8ff 0%,transparent 52%),
+  linear-gradient(135deg,#f8fafc 0%,#eef2ff 48%,#fdf2f8 100%);
+ background-attachment:fixed;color:var(--txt)}
+body.v2[data-accent="purple"]{--pri:#7c3aed}
+body.v2[data-accent="green"]{--pri:#059669}
+body.v2[data-accent="pink"]{--pri:#db2777}
+body.v2[data-accent="amber"]{--pri:#d97706}
+body.v2 .app{gap:18px;padding:18px;align-items:flex-start}
+body.v2 aside{position:sticky;top:18px;height:calc(100vh - 36px);border-radius:24px;
+ background:rgba(255,255,255,.62);border:1px solid rgba(255,255,255,.8);
+ box-shadow:0 24px 60px rgba(15,23,42,.12);backdrop-filter:blur(24px);color:#334155}
+body.v2 .brand{border-bottom:1px solid rgba(15,23,42,.06);padding:20px 18px 16px}
+body.v2 .brand b{color:#0f172a}
+body.v2 .brand i{color:#94a3b8}
+body.v2 .nav{color:#475569;border-left:0;margin:2px 10px;border-radius:12px;padding:10px 12px;transition:.18s}
+body.v2 .nav:hover{background:rgba(79,70,229,.08);color:#1e1b4b}
+body.v2 .nav.on{background:linear-gradient(135deg,var(--pri),#8b5cf6);color:#fff;box-shadow:0 10px 24px rgba(79,70,229,.28)}
+body.v2 .nav svg{opacity:.9}
+body.v2 .nav-group{color:#94a3b8}
+body.v2 main{margin-left:0;flex:1;min-width:0}
+body.v2 .top{position:sticky;top:18px;z-index:12;background:rgba(255,255,255,.58);backdrop-filter:blur(22px);
+ border:1px solid rgba(255,255,255,.8);border-radius:18px;margin:0 0 16px;padding:12px 16px;
+ box-shadow:0 12px 34px rgba(15,23,42,.07)}
+body.v2 .top h2{font-size:15px}
+body.v2 .wrap{padding:0 0 44px}
+body.v2 .card{background:rgba(255,255,255,.68);border:1px solid rgba(255,255,255,.82);border-radius:20px;
+ box-shadow:0 16px 40px rgba(15,23,42,.07);backdrop-filter:blur(18px);padding:20px}
+body.v2 .card h3{font-size:14px;letter-spacing:.01em}
+body.v2 .stat{background:rgba(255,255,255,.7);border:1px solid rgba(255,255,255,.85);border-radius:18px;
+ box-shadow:0 12px 30px rgba(15,23,42,.06)}
+body.v2 .btn{border-radius:12px;border-color:rgba(15,23,42,.08);background:rgba(255,255,255,.72)}
+body.v2 .btn:hover{background:#fff}
+body.v2 .btn.pri{background:linear-gradient(135deg,var(--pri),#8b5cf6);border-color:transparent;color:#fff;
+ box-shadow:0 8px 20px rgba(79,70,229,.26)}
+body.v2 .btn.ok{background:linear-gradient(135deg,#10b981,#059669);border-color:transparent;color:#fff}
+body.v2 .btn.bad{background:linear-gradient(135deg,#f87171,#dc2626);border-color:transparent;color:#fff}
+body.v2 .t,body.v2 input.t,body.v2 textarea.t,body.v2 select.t{background:rgba(255,255,255,.78);
+ border-color:rgba(15,23,42,.1);border-radius:11px}
+body.v2 .t:focus,body.v2 input.t:focus,body.v2 textarea.t:focus,body.v2 select.t:focus{border-color:var(--pri);
+ box-shadow:0 0 0 3px rgba(79,70,229,.12)}
+body.v2 .line{border-bottom-color:rgba(15,23,42,.06)}
+body.v2 .modal .box{border-radius:22px;background:rgba(255,255,255,.94);backdrop-filter:blur(24px);
+ box-shadow:0 30px 80px rgba(15,23,42,.22)}
+body.v2 .toast{background:rgba(15,23,42,.9);backdrop-filter:blur(12px);border-radius:12px}
+body.v2 .me{border-top:1px solid rgba(15,23,42,.06)}
+body.v2 .me p{color:#0f172a}
+body.v2 .me:hover{background:rgba(79,70,229,.06);border-radius:14px;margin:0 10px}
+body.v2 .hint{background:rgba(255,255,255,.55);border-color:rgba(15,23,42,.12);border-radius:12px}
+body.v2 .chip{background:rgba(79,70,229,.08);color:#4338ca}
+body.v2 .tag.ok{background:rgba(16,185,129,.12);color:#047857}
+body.v2 .tag.off{background:rgba(100,116,139,.12);color:#475569}
+body.v2 .tag.bad{background:rgba(220,38,38,.1);color:#b91c1c}
+body.v2 .empty{color:#94a3b8}
+body.v2 .sw{background:rgba(15,23,42,.16)}
+body.v2 .sw.on{background:linear-gradient(135deg,var(--pri),#8b5cf6)}
+body.v2 .avatar,body.v2 .av{box-shadow:0 6px 16px rgba(15,23,42,.12)}
+body.v2 .ui-palette{display:flex;gap:8px;flex-wrap:wrap}
+body.v2 .ui-palette button{width:30px;height:30px;border-radius:50%;border:2px solid #fff;cursor:pointer;
+ box-shadow:0 4px 12px rgba(15,23,42,.15)}
+body.v2 .ui-palette button.on{outline:2px solid var(--pri);outline-offset:2px}
+@media(max-width:760px){
+ body.v2 .app{padding:10px}
+ body.v2 aside{position:fixed;top:10px;bottom:10px;left:10px;height:auto;border-radius:22px}
+ body.v2 .top{top:10px;margin:0 0 12px}
+ body.v2 .wrap{padding:0 0 34px}
+}
 </style>
 </head>
-<body>
+<body class="${version === 'v2' ? 'v2' : ''}" data-accent="${esc(accent)}">
 <div class="app">
   <aside id="sb">
     <div class="brand">
@@ -267,7 +337,7 @@ font-family:ui-monospace,Menlo,Consolas,monospace;align-items:flex-start}
 <div class="toast" id="toast"></div>
 <script>
 var API='/administrator/api';
-var ME={user:'${esc(user)}'};
+var ME={user:'${esc(user)}',version:'${version === 'v2' ? 'v2' : 'v1'}'};
 var S={route:'home',data:{},settings:null,overview:null};
 function el(id){return document.getElementById(id)}
 function h(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -301,6 +371,8 @@ function confirmBox(title,text,onOk,danger){
 function sw(on,attr){return '<div class="sw'+(on?' on':'')+'" '+attr+'></div>'}
 var NAV=[
  ['home','首页','M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z'],
+ ['homepage','首页配置','M4 5h16v14H4zM4 9h16'],
+ ['agent','Agent 配置','M12 3a4 4 0 0 1 4 4c0 1.1-.5 2.1-1.2 2.8A6 6 0 0 1 18 15v3H6v-3a6 6 0 0 1 3.2-5.2A4 4 0 0 1 12 3zM9 21h6'],
  ['mcp','MCP 设置','M5 3h14v5H5zM5 16h14v5H5zM12 8v8','扩展管理'],
  ['skills','技能','M12 3l2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.2l5.9-.8z','扩展管理'],
  ['exts','扩展','M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z','扩展管理'],
@@ -351,11 +423,13 @@ function render(force){
  freshView.innerHTML='<div class="empty">加载中…</div>';
  if(oldView&&oldView.parentNode)oldView.parentNode.replaceChild(freshView,oldView);
  if(r[0]==='home')return pageHome();
+ if(r[0]==='homepage')return pageHomepageConfig();
+ if(r[0]==='agent')return pageAgent();
  if(r[0]==='mcp')return pageMcp();
  if(r[0]==='skills')return pageSkills();
  if(r[0]==='exts')return pageExts();
  if(r[0]==='modules')return pageModules();
- if(r[0]==='storage')return pageStorage();
+ if(r[0]==='storage')return r[1]?pageStoreDetail(r[1]):pageStorage();
  if(r[0]==='projects')return r[1]?pageProject(r[1]):pageProjects();
  if(r[0]==='new')return pageNew();
  if(r[0]==='settings')return pageSettings();
@@ -398,6 +472,35 @@ function pageHome(){
    kv2('累计回复',t.replies)+kv2('累计工具调用',t.tools)+kv2('累计 token',t.tokens)+
    kv2('累计部署',t.projects)+kv2('今日部署',td.projects)+kv2('错误日志',t.errors)+
   '</div></div>';
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function pageHomepageConfig(){
+ setTitle('首页配置');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ loadSettings(true).then(function(d){
+  var hp=(d.settings.ui&&d.settings.ui.homepage)||{};
+  v.innerHTML='<div class="card"><h3>公开首页</h3><div class="sub">访问网站根路径 / 时显示的页面。它不依赖 D1/KV,面板没配置好也能打开。</div>'+
+   '<div class="line"><div class="g"><b>启用首页</b><span>关闭后访问 / 会返回 404</span></div>'+sw(hp.enabled!==false,'data-t="hpEnabled"')+'</div>'+
+   '<div class="fld"><label class="f">标题</label><input class="t" id="hp-title" value="'+h(hp.title||'NOMO')+'" placeholder="NOMO"></div>'+
+   '<div class="fld"><label class="f">副标题</label><input class="t" id="hp-sub" value="'+h(hp.subtitle||'QQ 群聊 · AI 助手')+'" placeholder="QQ 群聊 · AI 助手"></div>'+
+   '<div class="fld"><label class="f">介绍文字</label><textarea class="t" id="hp-desc" style="min-height:110px">'+h(hp.description||'')+'</textarea></div>'+
+   '<div class="fld"><label class="f">GitHub 地址</label><input class="t mono" id="hp-github" value="'+h(hp.github||'https://github.com/MN-LKs/NOMO-QQBot')+'" placeholder="https://github.com/..."></div>'+
+   '<div class="line"><div class="g"><b>显示 GitHub 按钮</b><span>首页主按钮和页脚都显示</span></div>'+sw(hp.showGithub!==false,'data-t="hpGithub"')+'</div>'+
+   '<div style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="hp-save">保存</button><a class="btn" href="/" target="_blank" rel="noopener">打开首页</a></div>'+
+   '<div class="hint" style="margin-top:12px">首页是公开页面,不要在介绍里写密钥或内部地址。</div></div>';
+  v.querySelector('[data-t="hpEnabled"]').onclick=function(){this.classList.toggle('on')};
+  v.querySelector('[data-t="hpGithub"]').onclick=function(){this.classList.toggle('on')};
+  v.querySelector('#hp-save').onclick=function(){
+   var b=this;b.disabled=true;b.textContent='保存中…';
+   api('/settings',{method:'POST',body:{ui:{homepage:{
+    enabled:v.querySelector('[data-t="hpEnabled"]').classList.contains('on'),
+    showGithub:v.querySelector('[data-t="hpGithub"]').classList.contains('on'),
+    title:v.querySelector('#hp-title').value.trim(),
+    subtitle:v.querySelector('#hp-sub').value.trim(),
+    description:v.querySelector('#hp-desc').value.trim(),
+    github:v.querySelector('#hp-github').value.trim(),
+   }}}}).then(function(){toast('首页已保存');S.settings=null})
+    .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='保存'})};
  }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
 }
 function card(t,v,u){return '<div class="stat"><span>'+h(t)+'</span><b>'+(v||0)+'</b><i>'+h(u||'')+'</i></div>'}
@@ -503,14 +606,26 @@ function viewFile(id,path){
 function pageNew(){
  setTitle('部署项目');
  var files=[{path:'index.html',content:''}];
+ var backendMode='none',siteModules=[],NL=String.fromCharCode(10);
  var v=el('view');
  v.innerHTML='<div class="empty">加载中…</div>';
- loadSettings().then(function(){draw()}).catch(function(){draw()});
+ loadSettings().then(function(){
+  api('/modules').then(function(d){siteModules=(d.modules||[]).filter(function(m){return m.enabled!==false&&(m.callPoints||[]).indexOf('site')>=0});draw()}).catch(function(){draw()});
+ }).catch(function(){draw()});
  function draw(){
   v.innerHTML='<div class="card"><h3>部署新项目</h3><div class="sub">纯静态文件,支持 HTML / CSS / JS / 图片。提交后会得到一个 8 位 ID 与访问网址。</div>'+
    '<div class="row"><div><label class="f">项目名称</label><input class="t" id="n" placeholder="例如:2048 小游戏"></div>'+
    '<div><label class="f">有效期(分钟)</label><input class="t" id="ttl" type="number" min="1" value="'+S.ttlMinutes+'"></div></div>'+
    '<div class="fld" style="margin-top:13px"><label class="f">说明(可选)</label><input class="t" id="d" placeholder="一句话说明"></div>'+
+   '<div class="fld"><label class="f">后端能力</label><select class="t" id="backend-mode">'+
+    '<option value="none"'+(backendMode==='none'?' selected':'')+'>纯静态(HTML/CSS/JS + ./__data 简易存储)</option>'+
+    '<option value="custom"'+(backendMode==='custom'?' selected':'')+'>自定义 _backend.js(沙盒执行)</option>'+
+    '<option value="prefab"'+(backendMode==='prefab'?' selected':'')+'>预制后端模块(管理员在「模块」里勾了站点后端)</option>'+
+   '</select><div class="hint" id="backend-hint" style="margin-top:8px">'+
+    (backendMode==='custom'?'已加入 _backend.js 模板:用 ctx.method / ctx.path / ctx.body / ctx.store 读写数据,return 返回结果。':
+     backendMode==='prefab'?(siteModules.length?'可用模块:'+siteModules.map(function(m){return m.id+'('+m.name+')'}).join('、')+'。页面里 fetch("/api/模块id") 即可调用。<div style="margin-top:8px"><button class="btn sm" id="insert-prefab">插入调用示例</button></div>':'还没有勾了「站点后端」的预制模块,先去「模块」页配置。'):
+     '页面里可以用 fetch("./__data/键") 读写简易数据;需要服务端逻辑时再选自定义或预制后端。')+
+   '</div></div>'+
    '<div class="fld"><label class="f">文件</label>'+files.map(function(f,i){
      return '<div style="border:1px solid #e2e8f0;border-radius:9px;padding:12px;margin-bottom:10px">'+
       '<div class="row" style="align-items:center"><div style="flex:0 0 240px"><input class="t mono" data-p="'+i+'" value="'+h(f.path)+'" placeholder="index.html"></div>'+
@@ -522,6 +637,20 @@ function pageNew(){
    '<div class="hint" style="margin-top:14px">单个文件最大 '+bytes(S.maxFileBytes)+'。HTML 里可以直接用相对路径引用同项目的其它文件。'+
    '需要存数据的话,页面里可以调用 <span class="mono">fetch("./__data/键", {method:"POST", body:"值"})</span> 保存,用 <span class="mono">fetch("./__data/键")</span> 读取。</div></div>';
   v.querySelector('#back').onclick=function(){go('projects')};
+  v.querySelector('#backend-mode').onchange=function(){
+   backendMode=this.value;
+   if(backendMode==='custom'&&!files.some(function(f){return f.path==='_backend.js'})){
+    files.push({path:'_backend.js',content:'// 自定义后端:页面 fetch("/api/hello") 会执行这里'+NL+'return { ok: true, method: ctx.method, path: ctx.path, query: ctx.query };'+NL});
+   }
+   draw();
+  };
+  if(v.querySelector('#insert-prefab'))v.querySelector('#insert-prefab').onclick=function(){
+   var m=siteModules[0];if(!m)return;
+   var idx=files.findIndex(function(f){return f.path==='index.html'});
+   if(idx<0){files.push({path:'index.html',content:''});idx=files.length-1}
+   files[idx].content+='<'+'script>'+NL+'fetch("/api/'+m.id+'",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({})}).then(r=>r.json()).then(console.log);'+NL+'<'+'/script>';
+   draw();
+  };
   v.querySelector('#addf').onclick=function(){files.push({path:'',content:''});draw()};
   v.querySelectorAll('[data-rm]').forEach(function(b){b.onclick=function(){files.splice(Number(b.dataset.rm),1);if(!files.length)files.push({path:'index.html',content:''});draw()}});
   v.querySelectorAll('[data-p]').forEach(function(i){i.oninput=function(){files[Number(i.dataset.p)].path=i.value}});
@@ -539,48 +668,167 @@ function pageNew(){
 }
 function loadSettings(force){
  if(S.settings&&!force)return Promise.resolve(S.settings);
- return api('/settings').then(function(d){S.settings=d;S.ttlMinutes=d.deploy.ttlMinutes;S.extendMinutes=d.deploy.extendMinutes;S.maxFileBytes=d.maxFileBytes;return d});
+ return api('/settings').then(function(d){S.settings=d;S.ttlMinutes=(d.deploy&&d.deploy.ttlMinutes)||S.ttlMinutes;S.extendMinutes=(d.deploy&&d.extendMinutes)||S.extendMinutes;S.maxFileBytes=d.maxFileBytes||S.maxFileBytes;return d});
+}
+function pageAgent(){
+ setTitle('Agent 配置');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ loadSettings(true).then(function(d){
+  var s=(d&&d.settings)||{},llm=s.llm||{},se=s.search||{},ag=s.agent||{},dash=s.dashboard||{},motd=s.motd||{};
+  var headers=function(o){return h(JSON.stringify(o||{},null,0))};
+  var mapObj=se.response||{},mapText=Object.keys(mapObj).some(function(k){return mapObj[k]})?JSON.stringify(mapObj):'';
+  var mods=Array.isArray(ag.modalities)?ag.modalities:['text'];
+  var vision=ag.vision===true;
+  v.innerHTML=
+  '<div class="card"><h3>大模型接口</h3><div class="sub">机器人思考与对话用的接口。支持任意兼容 /chat/completions 的服务</div>'+
+   '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="ag-llm-url" value="'+h(llm.baseUrl)+'" placeholder="https://api.example.com/v1"></div>'+
+   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ag-llm-key" value="'+h(llm.apiKey)+'" placeholder="sk-..."></div>'+
+   '<div class="row"><div><label class="f">模型 ID</label><input class="t mono" id="ag-llm-model" value="'+h(llm.model)+'"></div>'+
+   '<div style="flex:0 0 140px"><label class="f">&nbsp;</label><button class="btn" id="ag-llm-list" style="width:100%">模型列表</button></div>'+
+   '<div style="flex:0 0 140px"><label class="f">&nbsp;</label><button class="btn pri" id="ag-llm-test" style="width:100%">测试</button></div></div>'+
+   '<div class="fld" id="ag-llm-models"></div>'+
+   '<div class="row"><div><label class="f">推理等级</label><select class="t" id="ag-llm-effort">'+
+    ['none','minimal','low','medium','high','max'].map(function(x){return '<option value="'+x+'"'+(llm.reasoningEffort===x?' selected':'')+'>'+x+'</option>'}).join('')+
+   '</select></div><div><label class="f">深度思考</label><select class="t" id="ag-llm-think"><option value="1"'+ (llm.deepThinking!==false?' selected':'')+'>开启</option><option value="0"'+(llm.deepThinking===false?' selected':'')+'>关闭</option></select></div></div>'+
+   '<div class="fld"><label class="f">自定义请求头(JSON,可留空)</label><textarea class="t mono" id="ag-llm-headers" placeholder=\\'{"X-Foo":"bar"}\\'>'+headers(llm.headers)+'</textarea></div>'+
+   '<div class="fld"><label class="f">中转站用量面板地址(「查额度」工具用,可留空)</label><input class="t mono" id="ag-llm-dash" value="'+h(dash.url||'')+'" placeholder="https://manage.example.com/api/dashboard"></div>'+
+   '<div class="row"><div><label class="f">单次请求限时</label><select class="t" id="ag-llm-limit"><option value="0"'+ (llm.timeLimitEnabled!==true?' selected':'')+'>不限制(推荐)</option><option value="1"'+(llm.timeLimitEnabled===true?' selected':'')+'>限制</option></select></div>'+
+   '<div><label class="f">最大秒数</label><input class="t" type="number" id="ag-llm-secs" value="'+(llm.maxSeconds||600)+'"></div></div>'+
+   '<button class="btn pri" id="ag-llm-save">保存</button></div>'+
+
+  '<div class="card"><h3>联网搜索</h3><div class="sub">填一个到 /v1 为止的地址:搜索走 /search,读取正文走 /reader。支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等</div>'+
+   '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="ag-se-base" value="'+h(se.baseUrl||'')+'" placeholder="https://api.example.com/v1"></div>'+
+   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ag-se-key" value="'+h(se.key)+'"></div>'+
+   '<div class="row"><div><label class="f">搜索路径</label><input class="t mono" id="ag-se-spath" value="'+h(se.searchPath||'/search')+'"></div>'+
+   '<div><label class="f">读取路径</label><input class="t mono" id="ag-se-rpath" value="'+h(se.readerPath||'/reader')+'"></div></div>'+
+   '<div class="row"><div><label class="f">每次返回条数(1-10)</label><input class="t" type="number" min="1" max="10" id="ag-se-results" value="'+(se.results||5)+'"></div>'+
+   '<div><label class="f">读取请求的 format 字段(可留空)</label><input class="t mono" id="ag-se-format" value="'+h(se.readerFormat||'')+'"></div></div>'+
+   '<div class="fld"><label class="f">自定义请求头(JSON)</label><textarea class="t mono" id="ag-se-headers">'+headers(se.headers)+'</textarea></div>'+
+   '<div class="fld"><label class="f">返回结构映射(JSON,可留空)</label><textarea class="t mono" id="ag-se-map">'+h(mapText)+'</textarea></div>'+
+   '<div class="line"><div class="g"><b>启用联网搜索</b><span>关闭后机器人不再联网</span></div>'+sw(se.enabled!==false,'data-t="agSeEnabled"')+'</div>'+
+   '<div class="line"><div class="g"><b>搜索后附第一条正文</b><span>会多花一次请求</span></div>'+sw(se.mergeReader!==false,'data-t="agSeMerge"')+'</div>'+
+   '<button class="btn pri" id="ag-se-save">保存</button> <button class="btn" id="ag-se-test">测试搜索</button></div>'+
+
+  '<div class="card"><h3>人设提示词</h3><div class="sub">留空使用默认人设。这段文字会作为系统提示词的一部分发给模型</div>'+
+   '<textarea class="t" id="ag-persona" style="min-height:120px">'+h(s.persona||'')+'</textarea>'+
+   '<div style="margin-top:12px"><button class="btn pri" id="ag-persona-save">保存人设</button></div></div>'+
+
+  '<div class="card"><h3>工作流</h3><div class="sub">写给模型的工作步骤。比如「先搜索,再读正文,最后给结论」;留空使用默认流程</div>'+
+   '<textarea class="t" id="ag-workflow" style="min-height:120px">'+h(llm.workflow||'')+'</textarea>'+
+   '<div style="margin-top:12px"><button class="btn pri" id="ag-workflow-save">保存工作流</button></div></div>'+
+
+  '<div class="card"><h3>模态能力</h3><div class="sub">图片识别是独立开关,默认关闭;只有打开后,群聊/单聊里的图片才会下载并作为多模态输入发给模型</div>'+
+   '<div class="line"><div class="g"><b>文本</b><span>始终开启</span></div><span class="tag ok">已开启</span></div>'+
+   '<div class="line"><div class="g"><b>图片识别</b><span>需要上游模型支持视觉;关闭时只把「[图片]」标签带进上下文</span></div>'+sw(vision,'data-t="agVision"')+'</div>'+
+   '<div class="line"><div class="g"><b>语音</b><span>允许模型处理语音输入(需上游支持)</span></div>'+sw(mods.indexOf('audio')>=0,'data-mod="audio"')+'</div>'+
+   '<button class="btn pri" id="ag-mod-save" style="margin-top:12px">保存模态</button></div>'+
+
+  '<div class="card"><h3>工具</h3><div class="sub">内置工具组可以在这里直接开关;外部 HTTP 扩展在「扩展」页管理</div><div id="ag-tools"><div class="empty">加载中…</div></div>'+
+   '<div style="margin-top:12px"><a class="btn" href="#/exts">管理外部扩展</a></div></div>'+
+
+  '<div class="card"><h3>MOTD 查询</h3><div class="sub">查询 Minecraft 服务器状态。文本 API 默认用 motd.txssb.cn;也可以换成你自己的接口。图片 API 留空时只发文字</div>'+
+   '<div class="line"><div class="g"><b>启用 MOTD</b><span>关闭后 /motd 和 Agent 工具都不可用</span></div>'+sw(motd.enabled!==false,'data-t="agMotdEnabled"')+'</div>'+
+   '<div class="fld"><label class="f">文本 API</label><input class="t mono" id="ag-motd-text" value="'+h(motd.textApi||'https://motd.txssb.cn/api/status')+'" placeholder="https://motd.txssb.cn/api/status"></div>'+
+   '<div class="fld"><label class="f">图片 API(可留空)</label><input class="t mono" id="ag-motd-image" value="'+h(motd.imageApi||'')+'" placeholder="https://motd.txssb.cn/api/status_img"></div>'+
+   '<div class="line"><div class="g"><b>发送图片</b><span>需要图片 API,且 QQ 富媒体上传成功;失败会自动退回文字</span></div>'+sw(motd.imageEnabled===true,'data-t="agMotdImage"')+'</div>'+
+   '<div class="row"><div><label class="f">超时(毫秒)</label><input class="t" type="number" id="ag-motd-timeout" value="'+(motd.timeoutMs||8000)+'"></div>'+
+   '<div><label class="f">测试地址</label><input class="t mono" id="ag-motd-host" placeholder="play.hypixel.net"></div></div>'+
+   '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn pri" id="ag-motd-save">保存</button><button class="btn" id="ag-motd-test">测试查询</button></div>'+
+   '<div class="hint" style="margin-top:12px">文本 API 支持 ip / port 参数;示例接口返回 MOTD、版本、在线人数和延迟。图片 API 需要返回 image/*。</div></div>';
+  bindAgent(v,d);
+  loadAgentTools(v);
+ }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+
+function bindAgent(v,d){
+ var s=(d&&d.settings)||{},se=s.search||{};
+ function save(patch,btn){
+  if(btn){btn.disabled=true;var t=btn.textContent;btn.textContent='保存中…'}
+  api('/settings',{method:'POST',body:patch}).then(function(r){toast(r&&r.note?r.note:'已保存');S.settings=null})
+   .catch(function(e){toast(e.message)})
+   .then(function(){if(btn){btn.disabled=false;btn.textContent=t}});
+ }
+ function headers(sel){try{return v.querySelector(sel).value.trim()?JSON.parse(v.querySelector(sel).value):{}}catch(e){toast('请求头不是合法的 JSON');throw e}}
+ v.querySelector('#ag-llm-save').onclick=function(){
+  var hh;try{hh=headers('#ag-llm-headers')}catch(e){return}
+  save({llm:{baseUrl:v.querySelector('#ag-llm-url').value.trim(),apiKey:v.querySelector('#ag-llm-key').value.trim(),
+   model:v.querySelector('#ag-llm-model').value.trim(),headers:hh,reasoningEffort:v.querySelector('#ag-llm-effort').value,
+   deepThinking:v.querySelector('#ag-llm-think').value==='1',timeLimitEnabled:v.querySelector('#ag-llm-limit').value==='1',
+   maxSeconds:Math.max(5,Number(v.querySelector('#ag-llm-secs').value)||600)},
+   dashboard:{url:v.querySelector('#ag-llm-dash').value.trim()}},this)};
+ v.querySelector('#ag-llm-list').onclick=function(){var b=this;b.disabled=true;b.textContent='获取中…';
+  var hh;try{hh=headers('#ag-llm-headers')}catch(e){b.disabled=false;b.textContent='模型列表';return}
+  api('/models',{method:'POST',body:{baseUrl:v.querySelector('#ag-llm-url').value.trim(),apiKey:v.querySelector('#ag-llm-key').value.trim(),headers:hh}})
+   .then(function(r){
+    v.querySelector('#ag-llm-models').innerHTML='<label class="f">接口返回的模型(点击选用)</label><div>'+
+     r.models.map(function(x){return '<span class="chip" data-am="'+h(x)+'" style="cursor:pointer">'+h(x)+'</span>'}).join('')+'</div>';
+    v.querySelectorAll('[data-am]').forEach(function(c){c.onclick=function(){v.querySelector('#ag-llm-model').value=c.dataset.am;toast('已填入 '+c.dataset.am)}});
+   }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='模型列表'})};
+ v.querySelector('#ag-llm-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
+  var hh;try{hh=headers('#ag-llm-headers')}catch(e){b.disabled=false;b.textContent='测试';return}
+  api('/test-llm',{method:'POST',body:{baseUrl:v.querySelector('#ag-llm-url').value.trim(),apiKey:v.querySelector('#ag-llm-key').value.trim(),headers:hh,model:v.querySelector('#ag-llm-model').value.trim()}})
+   .then(function(r){modal('Agent 测试','<pre class="code">'+h(JSON.stringify(r,null,2))+'</pre>','<button class="btn" data-x>关闭</button>').querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()}})
+   .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='测试'})};
+ v.querySelector('#ag-se-save').onclick=function(){var hh;try{hh=headers('#ag-se-headers')}catch(e){return}
+  var mv=v.querySelector('#ag-se-map').value.trim(),mm={results:'',title:'',url:'',snippet:'',content:''};
+  if(mv){try{mm=JSON.parse(mv)}catch(e){toast('返回结构映射不是合法 JSON');return}}
+  save({search:{baseUrl:v.querySelector('#ag-se-base').value.trim(),key:v.querySelector('#ag-se-key').value.trim(),
+   searchPath:v.querySelector('#ag-se-spath').value.trim()||'/search',readerPath:v.querySelector('#ag-se-rpath').value.trim()||'/reader',
+   results:Math.max(1,Math.min(10,Number(v.querySelector('#ag-se-results').value)||5)),readerFormat:v.querySelector('#ag-se-format').value.trim(),
+   headers:hh,response:mm}},this)};
+ v.querySelector('#ag-se-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
+  api('/test-search',{method:'POST',body:{query:'今天有什么新闻'}}).then(function(r){
+   modal('搜索测试结果','<pre class="code">'+h(JSON.stringify(r,null,2))+'</pre>','<button class="btn" data-x>关闭</button>').querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()};
+  }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='测试搜索'})};
+ v.querySelector('#ag-persona-save').onclick=function(){save({persona:v.querySelector('#ag-persona').value},this)};
+ v.querySelector('#ag-workflow-save').onclick=function(){save({llm:{workflow:v.querySelector('#ag-workflow').value}},this)};
+ v.querySelector('[data-t="agSeEnabled"]').onclick=function(){this.classList.toggle('on');save({search:{enabled:this.classList.contains('on')}})};
+ v.querySelector('[data-t="agSeMerge"]').onclick=function(){this.classList.toggle('on');save({search:{mergeReader:this.classList.contains('on')}})};
+ v.querySelector('#ag-mod-save').onclick=function(){
+  var vision=v.querySelector('[data-t="agVision"]').classList.contains('on');
+  var arr=['text'];if(vision)arr.push('image');
+  if(v.querySelector('[data-mod="audio"]').classList.contains('on'))arr.push('audio');
+  save({agent:{modalities:arr,vision:vision}},this)};
+ v.querySelector('[data-t="agMotdEnabled"]').onclick=function(){this.classList.toggle('on')};
+ v.querySelector('[data-t="agMotdImage"]').onclick=function(){this.classList.toggle('on')};
+ v.querySelector('#ag-motd-save').onclick=function(){
+  save({motd:{
+   enabled:v.querySelector('[data-t="agMotdEnabled"]').classList.contains('on'),
+   imageEnabled:v.querySelector('[data-t="agMotdImage"]').classList.contains('on'),
+   textApi:v.querySelector('#ag-motd-text').value.trim(),
+   imageApi:v.querySelector('#ag-motd-image').value.trim(),
+   timeoutMs:Math.max(2000,Math.min(30000,Number(v.querySelector('#ag-motd-timeout').value)||8000)),
+  }},this)};
+ v.querySelector('#ag-motd-test').onclick=function(){var b=this;var host=v.querySelector('#ag-motd-host').value.trim();
+  if(!host){toast('先填一个测试地址');return}
+  b.disabled=true;b.textContent='查询中…';
+  api('/test-motd',{method:'POST',body:{host:host}}).then(function(r){
+   modal('MOTD 测试','<pre class="code">'+h(r.text||'')+'</pre><details style="margin-top:10px"><summary class="small dim">原始 JSON</summary><pre class="code">'+h(JSON.stringify(r.result,null,2))+'</pre></details>','<button class="btn" data-x>关闭</button>')
+    .querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()};
+  }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='测试查询'})};
+}
+function loadAgentTools(v){
+ api('/exts').then(function(d){
+  var builtin=d.builtin||[];
+  var box=v.querySelector('#ag-tools');if(!box)return;
+  box.innerHTML=builtin.map(function(b){
+   return '<div class="line"><div class="g"><b>'+h(b.name)+'</b><span>'+h(b.description||'')+'</span>'+
+    '<span class="mono" style="font-size:11px">'+h((b.tools||[]).join(', '))+'</span></div>'+sw(b.enabled,'data-agtool="'+h(b.id)+'"')+'</div>';
+  }).join('');
+  box.querySelectorAll('[data-agtool]').forEach(function(n){n.onclick=function(){
+   api('/exts/toggle',{method:'POST',body:{id:n.dataset.agtool,enabled:!n.classList.contains('on')}})
+    .then(function(){n.classList.toggle('on');toast('已更新')}).catch(function(e){toast(e.message)})}});
+ }).catch(function(e){var box=v.querySelector('#ag-tools');if(box)box.innerHTML='<div class="empty">'+h(e.message)+'</div>'});
 }
 function pageSettings(){
  setTitle('设置');
  var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
  loadSettings(true).then(function(d){
-  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,ag=s.agent||{},dash=s.dashboard||{};
+  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,ag=s.agent||{},ui=s.ui||{},dash=s.dashboard||{};
   var headers=function(o){return h(JSON.stringify(o||{},null,0))};
   var mapObj=se.response||{},mapText=Object.keys(mapObj).some(function(k){return mapObj[k]})?JSON.stringify(mapObj):'';
   v.innerHTML=
-  '<div class="card"><h3>AI 接口</h3><div class="sub">机器人的大模型接口,支持任意 OpenAI 兼容的 /chat/completions</div>'+
-   '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="llm-url" value="'+h(llm.baseUrl)+'" placeholder="https://api.example.com/v1"></div>'+
-   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="llm-key" value="'+h(llm.apiKey)+'" placeholder="sk-..."></div>'+
-   '<div class="row"><div><label class="f">模型 ID</label><input class="t mono" id="llm-model" value="'+h(llm.model)+'"></div>'+
-   '<div style="flex:0 0 150px"><label class="f">&nbsp;</label><button class="btn" id="llm-list" style="width:100%">获取模型列表</button></div>'+
-   '<div style="flex:0 0 150px"><label class="f">&nbsp;</label><button class="btn pri" id="llm-test" style="width:100%">测试模型</button></div></div>'+
-   '<div class="fld" id="llm-models"></div>'+
-   '<div class="row"><div><label class="f">推理等级</label><select class="t" id="llm-effort">'+
-    ['none','minimal','low','medium','high','max'].map(function(x){return '<option value="'+x+'"'+(llm.reasoningEffort===x?' selected':'')+'>'+x+'</option>'}).join('')+
-   '</select></div><div><label class="f">深度思考</label><select class="t" id="llm-think"><option value="1"'+(llm.deepThinking!==false?' selected':'')+'>开启</option><option value="0"'+(llm.deepThinking===false?' selected':'')+'>关闭</option></select></div></div>'+
-   '<div class="fld"><label class="f">自定义请求头(JSON,可留空)</label><textarea class="t mono" id="llm-headers" placeholder=\\'{"X-Foo":"bar"}\\'>'+headers(llm.headers)+'</textarea></div>'+
-   '<div class="fld"><label class="f">中转站用量面板地址(「查额度」工具用,可留空)</label><input class="t mono" id="llm-dash" value="'+h(dash.url||'')+'" placeholder="https://manage.example.com/api/dashboard"></div>'+
-   '<div class="row"><div><label class="f">单次请求限时</label><select class="t" id="llm-limit"><option value="0"'+(llm.timeLimitEnabled!==true?' selected':'')+'>不限制(推荐,大工程慢慢跑)</option><option value="1"'+(llm.timeLimitEnabled===true?' selected':'')+'>限制</option></select></div>'+
-   '<div><label class="f">最大秒数(开启限时后生效)</label><input class="t" type="number" id="llm-secs" value="'+(llm.maxSeconds||600)+'"></div></div>'+
-   '<button class="btn pri" id="llm-save">保存</button></div>'+
-
-  '<div class="card"><h3>联网搜索</h3><div class="sub">填一个「到 /v1 为止」的接口地址:关键词搜索自动走 /search,网页读取自动走 /reader。支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等,按域名自动识别,其余走通用模式</div>'+
-   '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="se-base" value="'+h(se.baseUrl||'')+'" placeholder="https://api.example.com/v1"></div>'+
-   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="se-key" value="'+h(se.key)+'"></div>'+
-   '<div class="row"><div><label class="f">搜索路径</label><input class="t mono" id="se-spath" value="'+h(se.searchPath||'/search')+'" placeholder="/search"></div>'+
-   '<div><label class="f">读取路径</label><input class="t mono" id="se-rpath" value="'+h(se.readerPath||'/reader')+'" placeholder="/reader"></div></div>'+
-   '<div class="row"><div><label class="f">每次搜索返回条数(1-10)</label><input class="t" type="number" min="1" max="10" id="se-results" value="'+(se.results||5)+'"></div>'+
-   '<div><label class="f">读取请求的 format 字段(可留空)</label><input class="t mono" id="se-format" value="'+h(se.readerFormat||'')+'" placeholder="json / markdown / text"></div></div>'+
-   '<div class="fld"><label class="f">自定义请求头(JSON)</label><textarea class="t mono" id="se-headers">'+headers(se.headers)+'</textarea></div>'+
-   '<div class="fld"><label class="f">返回结构映射(JSON,可留空)</label><textarea class="t mono" id="se-map">'+h(mapText)+'</textarea><div class="small dim" style="margin-top:4px">默认自动从常见字段名里找;识别不出时照「测试搜索」结果里的原始片段填,例如 {"results":"data.items","title":"name"}</div></div>'+
-   '<div class="line"><div class="g"><b>启用联网搜索</b><span>关闭后机器人不再联网,凭已有知识回答</span></div>'+sw(se.enabled!==false,'data-t="seEnabled"')+'</div>'+
-   '<div class="line"><div class="g"><b>搜索后附第一条正文</b><span>自动抓第一条结果的网页正文,回答更准;会多花一次请求</span></div>'+sw(se.mergeReader!==false,'data-t="seMerge"')+'</div>'+
-   '<button class="btn pri" id="se-save">保存</button> <button class="btn" id="se-test">测试搜索与读取</button> <span class="small dim">测试用的是已保存的配置</span></div>'+
-
-  '<div class="card"><h3>人设提示词</h3><div class="sub">留空使用默认人设。这段文字会作为系统提示词的一部分发给模型</div>'+
-   '<textarea class="t" id="persona" style="min-height:120px">'+h(s.persona)+'</textarea>'+
-   '<div style="margin-top:12px"><button class="btn pri" id="persona-save">保存</button></div></div>'+
+  '<div class="card"><h3>Agent 配置</h3><div class="sub">AI 接口、联网搜索、人设、工作流、工具和模态已经移到独立的「Agent 配置」页,主设置只保留机器人、部署和日志</div><a class="btn pri" href="#/agent">打开 Agent 配置</a></div>'+
 
   '<div class="card"><h3>QQ 机器人</h3><div class="sub">连接方式可以随时切换</div>'+
    '<div class="row"><div><label class="f">APPID</label><input class="t mono" id="qq-id" value="'+h(qq.appId)+'"></div>'+
@@ -594,6 +842,7 @@ function pageSettings(){
    '<div class="fld"><label class="f">结果投递方式</label><select class="t" id="qq-delivery">'+
     '<option value="auto"'+(qq.answerDelivery!=='active'?' selected':'')+'>自动(被动窗口内被动回复,超时改用主动消息)</option>'+
     '<option value="active"'+(qq.answerDelivery==='active'?' selected':'')+'>总是主动消息(耗每月额度,慎用)</option></select></div>'+
+   '<div class="line"><div class="g"><b>Markdown 消息</b><span>帮助和 AI 回复用 Markdown 发送;失败自动退回纯文本(群聊 Markdown 可能需要开放平台权限)</span></div>'+sw(qq.markdown===true,'data-t="qqMarkdown"')+'</div>'+
    '<div class="fld" id="qq-hook" style="display:'+(qq.mode==='webhook'?'block':'none')+'">'+
     '<label class="f">回调地址(填到 QQ 开放平台 → 开发设置 → 回调配置)</label>'+
     '<div class="row"><div><input class="t mono" id="qq-cb" value="'+h(d.callbackUrl)+'"></div>'+
@@ -633,13 +882,24 @@ function pageSettings(){
    '<div class="line"><div class="g"><b>静态网页</b><span>纯 HTML/CSS/JS 文件,加上 ./__data 简易存储</span></div>'+sw((ag.architectures||['html']).indexOf('html')>=0,'data-t="archHtml"')+'</div>'+
    '<div class="line"><div class="g"><b>预制后端接口</b><span>页面可以调用「模块」页里勾了「站点后端」的模块</span></div>'+sw((ag.architectures||[]).indexOf('prefab')>=0,'data-t="archPrefab"')+'</div>'+
    '<div class="line"><div class="g"><b>自定义后端</b><span>页面里放 _backend.js,由沙盒执行,每站带独立数据存储</span></div>'+sw((ag.architectures||[]).indexOf('custom')>=0,'data-t="archCustom"')+'</div>'+
-   '<div class="hint" style="margin-top:12px">开启后,页面里 fetch("/api/…") 会先找同名的预制模块,再找页面所属站点的 _backend.js;有每分钟频率限制。</div></div>'+
+   '<div class="hint" style="margin-top:12px">开启后,页面里 fetch("/api/…") 会先找同名的预制模块,再找页面所属站点的 _backend.js;有每分钟频率限制。</div>'+
+   '<div class="line"><div class="g"><b>部署前确认</b><span>AI 部署先生成确认链接,管理员点「确认部署」后才真正创建</span></div>'+sw(dep.confirm===true,'data-t="deployConfirm"')+'</div></div>'+
 
   '<div class="card"><h3>日志</h3><div class="sub">调试模式会记录更详细的过程,占用更多存储</div>'+
    '<div class="line"><div class="g"><b>调试模式</b><span>记录每次请求、工具参数、上游原始返回</span></div>'+sw(lg.debug,'data-t="debug"')+'</div>'+
    '<div class="row" style="margin-top:13px"><div><label class="f">保留天数</label><input class="t" type="number" id="lg-days" value="'+lg.retentionDays+'"></div>'+
    '<div><label class="f">最多条数</label><input class="t" type="number" id="lg-max" value="'+lg.maxRows+'"></div></div>'+
-   '<div style="margin-top:12px"><button class="btn pri" id="lg-save">保存</button> <button class="btn" id="lg-clean">立即清理</button></div></div>';
+   '<div style="margin-top:12px"><button class="btn pri" id="lg-save">保存</button> <button class="btn" id="lg-clean">立即清理</button></div></div>'+
+
+  '<div class="card"><h3>界面</h3><div class="sub">V2 是浮动玻璃面板:柔和渐变背景、圆角悬浮卡片、可切换主题色。切换后整页刷新。</div>'+
+   '<div class="row"><div><label class="f">面板版本</label><select class="t" id="ui-version">'+
+    '<option value="v1"'+(ui.panelVersion!=='v2'?' selected':'')+'>V1 · 经典紧凑</option>'+
+    '<option value="v2"'+(ui.panelVersion==='v2'?' selected':'')+'>V2 · 浮动玻璃</option></select></div>'+
+   '<div><label class="f">主题色</label><select class="t" id="ui-accent">'+
+    ['blue','purple','green','pink','amber'].map(function(x){return '<option value="'+x+'"'+((ui.accent||'blue')===x?' selected':'')+'>'+x+'</option>'}).join('')+
+   '</select></div></div>'+
+   '<div class="hint" style="margin-top:12px">V2 的首页在「首页配置」里改;主题色只影响面板,V2 下生效。</div>'+
+   '<div style="margin-top:12px"><button class="btn pri" id="ui-save">保存并刷新</button></div></div>';
   bindSettings(v);
  }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
 }
@@ -663,7 +923,7 @@ function bindSettings(v){
    .catch(function(e){toast(e.message)})
    .then(function(){if(btn){btn.disabled=false;btn.textContent=t}});
  }
- v.querySelector('#llm-save').onclick=function(){var b=this;
+ if(v.querySelector('#llm-save'))v.querySelector('#llm-save').onclick=function(){var b=this;
   var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){return}
   save({llm:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),
    model:v.querySelector('#llm-model').value.trim(),headers:hh,reasoningEffort:v.querySelector('#llm-effort').value,
@@ -671,7 +931,7 @@ function bindSettings(v){
    timeLimitEnabled:v.querySelector('#llm-limit').value==='1',
    maxSeconds:Math.max(5,Number(v.querySelector('#llm-secs').value)||600)},
    dashboard:{url:v.querySelector('#llm-dash').value.trim()}},b)};
- v.querySelector('#llm-list').onclick=function(){var b=this;b.disabled=true;b.textContent='获取中…';
+ if(v.querySelector('#llm-list'))v.querySelector('#llm-list').onclick=function(){var b=this;b.disabled=true;b.textContent='获取中…';
   var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){b.disabled=false;b.textContent='获取模型列表';return}
   api('/models',{method:'POST',body:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),headers:hh}})
   .then(function(r){
@@ -680,22 +940,22 @@ function bindSettings(v){
     r.models.map(function(x){return '<span class="chip" data-m="'+h(x)+'" style="cursor:pointer">'+h(x)+'</span>'}).join('')+'</div>';
    v.querySelectorAll('[data-m]').forEach(function(c){c.onclick=function(){v.querySelector('#llm-model').value=c.dataset.m;toast('已填入 '+c.dataset.m)}});
   }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='获取模型列表'})};
- v.querySelector('#llm-test').onclick=function(){testLLM(v)};
- v.querySelector('#se-save').onclick=function(){var b=this;var hh;try{hh=jparse(v.querySelector('#se-headers').value,{})}catch(e){return}
+ if(v.querySelector('#llm-test'))v.querySelector('#llm-test').onclick=function(){testLLM(v)};
+ if(v.querySelector('#se-save'))v.querySelector('#se-save').onclick=function(){var b=this;var hh;try{hh=jparse(v.querySelector('#se-headers').value,{})}catch(e){return}
   var mv=v.querySelector('#se-map').value.trim(),mm={results:'',title:'',url:'',snippet:'',content:''};
   if(mv){try{mm=JSON.parse(mv)}catch(e){toast('返回结构映射不是合法 JSON');return}}
   save({search:{baseUrl:v.querySelector('#se-base').value.trim(),key:v.querySelector('#se-key').value.trim(),
     searchPath:v.querySelector('#se-spath').value.trim()||'/search',readerPath:v.querySelector('#se-rpath').value.trim()||'/reader',
     results:Math.max(1,Math.min(10,Number(v.querySelector('#se-results').value)||5)),
     readerFormat:v.querySelector('#se-format').value.trim(),headers:hh,response:mm}},b)};
- v.querySelector('#se-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
+ if(v.querySelector('#se-test'))v.querySelector('#se-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
   api('/test-search',{method:'POST',body:{query:'今天有什么新闻'}}).then(function(r){
    modal('搜索测试结果','<pre class="code">'+h(JSON.stringify(r,null,2))+'</pre>','<button class="btn" data-x>关闭</button>')
     .querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()};
   }).catch(function(e){modal('搜索测试失败','<div class="hint" style="border-color:#fecaca;color:#b91c1c">'+h(e.message)+'</div>','<button class="btn" data-x>关闭</button>')
    .querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()}})
   .then(function(){b.disabled=false;b.textContent='测试搜索'})};
- v.querySelector('#persona-save').onclick=function(){save({persona:v.querySelector('#persona').value},this)};
+ if(v.querySelector('#persona-save'))v.querySelector('#persona-save').onclick=function(){save({persona:v.querySelector('#persona').value},this)};
  v.querySelector('#qq-mode').onchange=function(){v.querySelector('#qq-hook').style.display=this.value==='webhook'?'block':'none'};
  v.querySelector('#qq-copy').onclick=function(){var i=v.querySelector('#qq-cb');i.select();
   try{navigator.clipboard.writeText(i.value);toast('已复制')}catch(e){document.execCommand('copy');toast('已复制')}};
@@ -703,7 +963,8 @@ function bindSettings(v){
   api('/settings',{method:'POST',body:{qq:{appId:v.querySelector('#qq-id').value.trim(),
    appSecret:v.querySelector('#qq-secret').value.trim(),mode:v.querySelector('#qq-mode').value,
    sandbox:v.querySelector('#qq-env').value==='sandbox',
-   answerDelivery:v.querySelector('#qq-delivery').value}}})
+   answerDelivery:v.querySelector('#qq-delivery').value,
+   markdown:v.querySelector('[data-t="qqMarkdown"]').classList.contains('on')}}})
   .then(function(r){toast(r.note||'已保存并应用');S.settings=null;render()})
   .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='保存并应用'})};
  function tog(sel,path){var n=v.querySelector(sel);if(!n)return;n.onclick=function(){
@@ -711,7 +972,9 @@ function bindSettings(v){
   var patch={};patch[path[0]]={};patch[path[0]][path[1]]=on;save(patch)}};
  tog('[data-t="allowAll"]',['groups','allowAll']);
  tog('[data-t="groupAdmins"]',['admin','groupAdmins']);
+ tog('[data-t="qqMarkdown"]',['qq','markdown']);
  tog('[data-t="allowData"]',['deploy','allowData']);
+ tog('[data-t="deployConfirm"]',['deploy','confirm']);
  tog('[data-t="debug"]',['logs','debug']);
  tog('[data-t="seEnabled"]',['search','enabled']);
  tog('[data-t="seMerge"]',['search','mergeReader']);
@@ -753,6 +1016,10 @@ function bindSettings(v){
  v.querySelector('#lg-clean').onclick=function(){var b=this;b.disabled=true;
   api('/logs/cleanup',{method:'POST'}).then(function(r){toast('清理完成,剩余 '+r.count+' 条')}).catch(function(e){toast(e.message)})
   .then(function(){b.disabled=false})};
+ v.querySelector('#ui-accent').onchange=function(){document.body.dataset.accent=this.value};
+ v.querySelector('#ui-save').onclick=function(){var b=this;b.disabled=true;b.textContent='保存中…';
+  api('/settings',{method:'POST',body:{ui:{panelVersion:v.querySelector('#ui-version').value,accent:v.querySelector('#ui-accent').value}}})
+   .then(function(){location.reload()}).catch(function(e){toast(e.message);b.disabled=false;b.textContent='保存并刷新'})};
 }
 function testLLM(v){
  var url=v.querySelector('#llm-url').value.trim(),key=v.querySelector('#llm-key').value.trim();
@@ -1068,6 +1335,108 @@ function pageModules(){
   if(editing)v.querySelector('#mo-cancel').onclick=function(){modEdit=null;render()};
  }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
 }
+function pageStoreDetail(id){
+ setTitle('存储详情');
+ var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
+ var prefix='',nextCursor=null;
+ function load(cursor,append){
+  var q='/storage/'+encodeURIComponent(id)+'?limit=100&prefix='+encodeURIComponent(prefix)+(cursor?'&cursor='+encodeURIComponent(cursor):'');
+  api(q).then(function(d){draw(d,append,cursor)}).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+ }
+ function fileRow(k){
+  return '<div class="file" data-key="'+h(k.name)+'"><b style="word-break:break-all">'+h(k.name)+'</b>'+
+   '<span class="dim small" style="margin-left:auto;flex:0 0 90px;text-align:right">'+bytes(k.size)+'</span>'+
+   '<button class="btn sm" data-view="'+h(k.name)+'">查看</button>'+
+   '<button class="btn sm bad" data-del="'+h(k.name)+'">删除</button></div>';
+ }
+ function bindRows(root){
+  root.querySelectorAll('[data-view]').forEach(function(b){b.onclick=function(e){e.stopPropagation();viewStoreFile(b.dataset.view)}});
+  root.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(e){e.stopPropagation();
+   confirmBox('删除文件','确认删除「'+h(b.dataset.del)+'」?这个操作不可撤销。',function(){
+    api('/storage/'+encodeURIComponent(id)+'/file',{method:'DELETE',body:{path:b.dataset.del}})
+     .then(function(){toast('已删除');load()}).catch(function(err){toast(err.message)})},true)}});
+ }
+ function draw(d,append,cursor){
+  var s=d.store||{},keys=d.keys||[];
+  var pct=s.maxBytes?Math.min(100,Math.round(s.usedBytes/s.maxBytes*100)):0;
+  var cap=s.maxBytes?bytes(s.maxBytes):'未设置';
+  var pmax=s.providerMaxBytes?bytes(s.providerMaxBytes):'未知';
+  if(append){
+   var list=v.querySelector('#sd-list');if(list)list.insertAdjacentHTML('beforeend',keys.map(fileRow).join(''));
+   bindRows(v);
+  }else{
+   v.innerHTML='<div class="card"><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">'+
+    '<div style="flex:1;min-width:220px"><h3 style="margin:0">'+h(s.name||id)+'</h3>'+
+    '<div class="sub" style="margin:4px 0 0">'+h(s.kind)+' · 优先级 '+(s.priority||0)+(s.endpoint?' · '+h(s.endpoint):'')+(s.bucket?' / '+h(s.bucket):'')+'</div></div>'+
+    '<button class="btn" id="sd-back">返回存储列表</button></div>'+
+    '<div class="grid g4" style="margin-top:16px">'+
+     '<div class="stat"><span>已用</span><b style="font-size:18px">'+bytes(s.usedBytes)+'</b><i>'+s.files+' 个文件</i></div>'+
+     '<div class="stat"><span>用户上限</span><b style="font-size:18px">'+cap+'</b><i>写入时按这个限制</i></div>'+
+     '<div class="stat"><span>服务商参考上限</span><b style="font-size:18px">'+pmax+'</b><i>按存储类型/端点识别</i></div>'+
+     '<div class="stat"><span>占用比例</span><b style="font-size:18px">'+pct+'%</b><i>'+(s.available===false?'不可用':'可用')+'</i></div>'+
+    '</div>'+
+    '<div class="bar" style="margin-top:14px"><i class="'+(pct>=90?'bad':pct>=70?'warn':'')+'" style="width:'+pct+'%"></i></div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">'+
+     '<input class="t mono" id="sd-prefix" value="'+h(prefix)+'" placeholder="前缀筛选,例如 f/" style="flex:1;min-width:180px">'+
+     '<button class="btn" id="sd-filter">筛选</button>'+
+     '<button class="btn" id="sd-scan">重新扫描</button>'+
+     '<button class="btn pri" id="sd-new">新建文本文件</button>'+
+    '</div></div>'+
+    '<div class="card"><h3>文件</h3><div class="sub">点击「查看」编辑文本文件;二进制文件给下载链接</div>'+
+     '<div id="sd-list">'+(keys.length?keys.map(fileRow).join(''):'<div class="empty">这个前缀下没有文件</div>')+'</div>'+
+     (d.cursor?'<div style="margin-top:12px"><button class="btn" id="sd-more">加载更多</button></div>':'')+'</div>';
+   v.querySelector('#sd-back').onclick=function(){go('storage')};
+   v.querySelector('#sd-filter').onclick=function(){prefix=v.querySelector('#sd-prefix').value.trim();nextCursor=null;load()};
+   v.querySelector('#sd-scan').onclick=function(){var b=this;b.disabled=true;b.textContent='扫描中…';
+    api('/storage/scan',{method:'POST',body:{id:id}}).then(function(r){toast('扫描完成:'+bytes(r.bytes)+' / '+r.files+' 个文件');load()})
+     .catch(function(e){toast(e.message);b.disabled=false;b.textContent='重新扫描'})};
+   v.querySelector('#sd-new').onclick=newStoreFile;
+   if(v.querySelector('#sd-more'))v.querySelector('#sd-more').onclick=function(){load(d.cursor,true)};
+   bindRows(v);
+  }
+  nextCursor=d.cursor||null;
+ }
+ function viewStoreFile(key){
+  api('/storage/'+encodeURIComponent(id)+'/file?path='+encodeURIComponent(key)).then(function(f){
+   var body;
+   if(f.kind==='text'){
+    body='<div class="hint" style="margin-bottom:10px">'+h(f.ct)+' · '+bytes(f.size)+'</div>'+
+     '<textarea class="t mono" id="sd-content" style="min-height:340px">'+h(f.text)+'</textarea>'+
+     '<div style="margin-top:10px"><button class="btn pri" id="sd-save">保存</button></div>';
+   }else{
+    body='<div class="hint">二进制文件('+h(f.ct)+', '+bytes(f.size)+'),不能直接编辑。</div>'+
+     '<div style="margin-top:12px"><a class="btn pri" download="'+h(key.split('/').pop()||'file')+'" href="data:'+h(f.ct)+';base64,'+f.data+'">下载文件</a></div>';
+   }
+   var m=modal('文件 · '+key,body,'<button class="btn" data-x>关闭</button>');
+   m.querySelector('[data-x]').onclick=function(){m.remove()};
+   if(f.kind==='text')m.querySelector('#sd-save').onclick=function(){var b=this;b.disabled=true;b.textContent='保存中…';
+    api('/storage/'+encodeURIComponent(id)+'/file',{method:'POST',body:{path:key,content:m.querySelector('#sd-content').value,encoding:'text',contentType:f.ct}})
+     .then(function(){toast('已保存');m.remove();load()}).catch(function(e){toast(e.message);b.disabled=false;b.textContent='保存'})};
+  }).catch(function(e){toast(e.message)});
+ }
+ function newStoreFile(){
+  var m=modal('新建文本文件','<div class="fld"><label class="f">路径</label><input class="t mono" id="sd-path" placeholder="notes/hello.txt"></div>'+
+   '<div class="fld"><label class="f">内容</label><textarea class="t mono" id="sd-new-content" style="min-height:220px"></textarea></div>',
+   '<button class="btn" data-x>取消</button><button class="btn pri" data-ok>保存</button>');
+  m.querySelector('[data-x]').onclick=function(){m.remove()};
+  m.querySelector('[data-ok]').onclick=function(){var b=this;var path=m.querySelector('#sd-path').value.trim();
+   if(!path){toast('请填写路径');return}
+   b.disabled=true;b.textContent='保存中…';
+   api('/storage/'+encodeURIComponent(id)+'/file',{method:'POST',body:{path:path,content:m.querySelector('#sd-new-content').value,encoding:'text',contentType:mimeGuess(path)}})
+    .then(function(){toast('已保存');m.remove();load()}).catch(function(e){toast(e.message);b.disabled=false;b.textContent='保存'})};
+ }
+ load();
+}
+function mimeGuess(path){
+ var n=String(path||'').toLowerCase();
+ if(/\.html?$/.test(n))return 'text/html';
+ if(/\.css$/.test(n))return 'text/css';
+ if(/\.js$/.test(n))return 'text/javascript';
+ if(/\.json$/.test(n))return 'application/json';
+ if(/\.md$/.test(n))return 'text/markdown';
+ if(/\.svg$/.test(n))return 'image/svg+xml';
+ return 'text/plain';
+}
 function pageStorage(){
  setTitle('存储');
  var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
@@ -1096,6 +1465,7 @@ function pageStorage(){
       (s.endpoint?' · '+h(s.endpoint):'')+(s.bucket?' / '+h(s.bucket):'')+'</span>'+
       (s.reason?'<br><span class="small" style="color:#b45309">'+h(s.reason)+'</span>':'')+'</div>'+
       '<div class="line" style="border:0;padding:0">'+sw(s.enabled,'data-en="'+h(s.id)+'"')+'</div>'+
+      '<button class="btn sm pri" data-detail="'+h(s.id)+'">详情</button>'+
       '<button class="btn sm" data-test="'+h(s.id)+'">测试</button>'+
       '<button class="btn sm" data-scan="'+h(s.id)+'">扫描</button>'+
       '<button class="btn sm" data-edit="'+h(s.id)+'">编辑</button>'+
@@ -1132,6 +1502,7 @@ function pageStorage(){
     toast('扫描完成:'+bytes(r.bytes)+' / '+r.files+' 个文件');render()})
     .catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent=old})}});
   v.querySelectorAll('[data-edit]').forEach(function(b){b.onclick=function(){storeEdit=byId(b.dataset.edit);render()}});
+  v.querySelectorAll('[data-detail]').forEach(function(b){b.onclick=function(){go('storage/'+b.dataset.detail)}});
   v.querySelectorAll('[data-del]').forEach(function(b){b.onclick=function(){
    var s=byId(b.dataset.del);
    confirmBox('删除存储','确认移除「'+h(s.name||b.dataset.del)+'」?存储里已有的文件不会自动删除。',function(){

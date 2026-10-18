@@ -28,7 +28,7 @@ function listen(handler) {
 }
 
 // ---------------- 假上游:QQ 开放平台 + 大模型 ----------------
-const calls = { token: 0, messages: [], llm: [] };
+const calls = { token: 0, messages: [], llm: [], mute: [] };
 async function startUpstream() {
   const { server, port } = await listen((req, res) => {
     let body = '';
@@ -45,6 +45,10 @@ async function startUpstream() {
       if (/^\/v2\/(groups|users)\/.+\/messages/.test(req.url)) {
         calls.messages.push({ url: req.url, body: JSON.parse(body || '{}'), auth: req.headers.authorization });
         return send({ id: `SENT_${calls.messages.length}`, timestamp: Date.now() });
+      }
+      if (req.url.includes('/restrict_chat_setting')) {
+        calls.mute.push({ url: req.url, body: JSON.parse(body || '{}') });
+        return send({});
       }
       if (req.url.includes('/chat/completions')) {
         const reqBody = JSON.parse(body || '{}');
@@ -331,6 +335,21 @@ await t('面板部署一个项目', async () => {
   pid = r.json.id;
   assert(/^[a-z0-9]{8}$/.test(pid), `ID 应为 8 位:${pid}`);
 });
+await t('部署确认:创建待确认、确认后创建项目', async () => {
+  const core = env.BOT_CORE.core('core');
+  const pending = await core.createPendingDeploy({
+    name: '确认测试', description: '确认后部署', owner: 'test',
+    files: [{ path: 'index.html', content: '<h1>confirmed</h1>' }],
+  }, { convId: 'g:GROUP_TEST_1', targetId: 'GROUP_TEST_1', scene: 'group', messageId: 'MSG_CONFIRM' });
+  assert(pending.token, JSON.stringify(pending));
+  const page = await call(`/confirm/${pending.token}`, { useCookie: false });
+  assert(page.status === 200 && page.text.includes('确认部署'), `确认页 ${page.status}`);
+  const r = await core.resolvePending(pending.token, true, { notify: false });
+  assert(r.ok && r.site && r.site.url, JSON.stringify(r));
+  const after = await core.getPending(pending.token);
+  assert(after === null, '确认后应删除 pending');
+  await core.deleteSite(r.site.id);
+});
 await t('访问部署好的页面', async () => {
   const r = await call(`/${pid}`);
   assert(r.status === 200, `实际 ${r.status}`);
@@ -557,8 +576,27 @@ await t('关闭开关后,名单内的群仍可用', async () => {
   for (let i = 0; i < 200 && calls.messages.length < before + 2; i++) await sleep(50);
   assert(calls.messages.length >= before + 2, `名单内的群应能收到回复,实际 ${calls.messages.length - before} 条`);
 });
+await t('管理员禁言:调用 restrict_chat_setting', async () => {
+  await api('/settings', { method: 'POST', body: { admin: { openIds: [{ openid: 'USER_TEST_1' }] } } });
+  const before = calls.mute.length;
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_mute`, op: 0, s: 10, t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id: 'MSG_TEST_MUTE', content: '/禁言 <@!USER_TEST_2> 1', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  for (let i = 0; i < 200 && calls.mute.length < before + 1; i++) await sleep(50);
+  assert(calls.mute.length === before + 1, `没有调用禁言接口,实际 ${calls.mute.length - before}`);
+  const m = calls.mute[before];
+  assert(m.url.includes('GROUP_TEST_1') && m.url.includes('restrict_chat_setting'), m.url);
+  assert(m.body.members?.[0]?.op === 'add', JSON.stringify(m.body));
+  assert(m.body.members[0].member_openid === 'USER_TEST_2', JSON.stringify(m.body));
+  assert(m.body.members[0].mute_expire_at, '应带禁言到期时间');
+});
 await t('群白名单:未授权群被忽略', async () => {
-  const before = calls.messages.length;
+  const before = calls.messages.filter((m) => m.url.includes('GROUP_OTHER')).length;
   const ts = String(Math.floor(Date.now() / 1000));
   const body = JSON.stringify({
     id: `EV_${Date.now()}_2`, op: 0, s: 2, t: 'GROUP_AT_MESSAGE_CREATE',
@@ -568,7 +606,7 @@ await t('群白名单:未授权群被忽略', async () => {
   const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
   await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
   await sleep(600);
-  assert(calls.messages.length === before, '白名单外的群不该收到回复');
+  assert(calls.messages.filter((m) => m.url.includes('GROUP_OTHER')).length === before, '白名单外的群不该收到回复');
 });
 await t('查信息指令返回 openID', async () => {
   const before = calls.messages.length;
@@ -584,6 +622,26 @@ await t('查信息指令返回 openID', async () => {
   const msg = calls.messages[calls.messages.length - 1];
   assert(msg.body.content.includes('USER_TEST_1'), msg.body.content);
   assert(msg.body.content.includes('GROUP_TEST_1'), msg.body.content);
+});
+
+await t('Markdown 模式:帮助以 msg_type=2 发送', async () => {
+  await api('/settings', { method: 'POST', body: { qq: { markdown: true } } });
+  const ts = String(Math.floor(Date.now() / 1000));
+  const body = JSON.stringify({
+    id: `EV_${Date.now()}_md`, op: 0, s: 4, t: 'GROUP_AT_MESSAGE_CREATE',
+    d: { id: 'MSG_TEST_MD', content: '/帮助', group_openid: 'GROUP_TEST_1', author: { member_openid: 'USER_TEST_1', nickname: '小明' } },
+  });
+  const keys = await keysFromSecret('test-app-secret-not-real');
+  const sig = bytesToHex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, keys.privateKey, concatBytes(utf8(ts), utf8(body)))));
+  await call('/qq/webhook', { method: 'POST', body, headers: { 'X-Signature-Ed25519': sig, 'X-Signature-Timestamp': ts }, useCookie: false });
+  let md = null;
+  for (let i = 0; i < 100 && !md; i++) {
+    md = calls.messages.find((m) => m.body.msg_id === 'MSG_TEST_MD');
+    if (!md) await sleep(50);
+  }
+  assert(md, '没有收到帮助消息');
+  assert(md.body.msg_type === 2 && md.body.markdown?.content?.includes('##'), JSON.stringify(md.body));
+  await api('/settings', { method: 'POST', body: { qq: { markdown: false } } });
 });
 
 console.log('\n【全量消息与 /AI 触发】');
@@ -767,11 +825,45 @@ await t('扩展开关:关掉后工具从模型可见列表消失', async () => {
 });
 
 console.log('\n【存储】');
+await t('V2 面板与公开首页配置', async () => {
+  let r = await api('/settings', { method: 'POST', body: { ui: { panelVersion: 'v2', accent: 'purple', homepage: { title: '测试站', description: '测试介绍' } } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const panel = await call('/administrator');
+  assert(panel.status === 200, `面板 ${panel.status}`);
+  assert(panel.text.includes('<body class="v2" data-accent="purple">'), '面板应带 V2 类名和主题色');
+  assert(panel.text.includes('body.v2'), '面板应包含 V2 样式');
+  const home = await call('/', { useCookie: false });
+  assert(home.status === 200, `首页 ${home.status}`);
+  assert(home.text.includes('测试站') && home.text.includes('测试介绍'), '首页应读取配置');
+});
 await t('存储状态:自动识别 KV 绑定', async () => {
   const r = await api('/storage');
   assert(r.status === 200, JSON.stringify(r.json));
   const kv = (r.json.status.stores || []).find((s) => s.id === 'kv');
   assert(kv && kv.available, JSON.stringify(r.json.status.stores));
+});
+await t('存储详情与文件管理:写/读/删', async () => {
+  const path = `notes/test-${Date.now()}.txt`;
+  let r = await api('/storage/kv/file', { method: 'POST', body: { path, content: 'hello 世界', encoding: 'text' } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  r = await api(`/storage/kv/file?path=${encodeURIComponent(path)}`);
+  assert(r.status === 200 && r.json.kind === 'text' && r.json.text.includes('hello'), JSON.stringify(r.json));
+  const d = await api(`/storage/kv?prefix=${encodeURIComponent('notes/')}`);
+  assert(d.status === 200 && d.json.keys.some((k) => k.name === path), JSON.stringify(d.json.keys));
+  assert(d.json.store.providerMaxBytes > 0, '应返回服务商参考上限');
+  r = await api('/storage/kv/file', { method: 'DELETE', body: { path } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const gone = await api(`/storage/kv/file?path=${encodeURIComponent(path)}`);
+  assert(gone.status === 404, '删除后应 404');
+});
+await t('公开媒体路由:只读 KV 里的 media/ 图片', async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  await env.STORE.put('media/test-png.png', png);
+  const r = await call('/media/test-png.png', { useCookie: false });
+  assert(r.status === 200, `实际 ${r.status}`);
+  assert(r.headers.get('content-type') === 'image/png', r.headers.get('content-type'));
+  const bad = await call('/media/../secret.png', { useCookie: false });
+  assert(bad.status === 404, '路径穿越应 404');
 });
 await t('添加 S3 存储:密钥打码且不泄露', async () => {
   const r = await api('/storage/save', { method: 'POST', body: { store: {

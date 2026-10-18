@@ -329,6 +329,23 @@ export function buildTools(cfg, extras = {}) {
       },
     });
   }
+  if (on('motd') && cfg.motdEnabled !== false) {
+    out.push({
+      type: 'function',
+      function: {
+        name: 'motd',
+        description: '查询 Minecraft 服务器状态(MOTD、版本、在线人数、延迟)。用户给 IP 或域名让你查服务器时用。',
+        parameters: {
+          type: 'object',
+          properties: {
+            host: { type: 'string', description: '服务器地址,例如 play.example.com 或 1.2.3.4' },
+            port: { type: 'string', description: '可选端口,Java 默认 25565,Bedrock 常见 19132' },
+          },
+          required: ['host'],
+        },
+      },
+    });
+  }
 
   // ---------- 沙盒(属于部署工作流) ----------
   if (cfg.canDeploy) {

@@ -14,6 +14,7 @@ export const BUILTIN_EXTS = [
   { id: 'dashboard', name: '中转站用量', description: '查询 AI 中转站面板的实时用量', tools: ['query_dashboard'] },
   { id: 'memory', name: '会话记忆', description: '记住 / 回忆 / 忘掉会话里的信息', tools: ['remember', 'recall', 'forget'] },
   { id: 'groups', name: '群聊记忆', description: '查询群消息缓存、按关键词找群', tools: ['group_recent', 'group_find'] },
+  { id: 'motd', name: 'MOTD 查询', description: '查询 Minecraft Java / Bedrock 服务器状态与 MOTD', tools: ['motd'] },
 ];
 
 export function builtinIds() {

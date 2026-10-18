@@ -1,12 +1,13 @@
 import { loadEnv, missingEnv, missingStorage, FIXED, CSP_PANEL } from './config.js';
 import { loadCfg, getRaw } from './store/settings.js';
 import { handleWebhook } from './qq/webhook.js';
-import { serveSite, splitSitePath, page, handleSiteApi, RESERVED } from './serve.js';
+import { serveSite, splitSitePath, page, handleSiteApi, serveMedia, RESERVED } from './serve.js';
 import { isSiteId } from './util/id.js';
 import { BotCore } from './core/do.js';
 import { handlePanelApi, jsonRes } from './panel/api.js';
 import { loginPage, panelPage, lockedPage } from './panel/ui.js';
 import { homePage } from './panel/home.js';
+import { confirmPage } from './panel/confirm.js';
 import { isAuthed, checkCredentials, issue, cookieHeader, clearCookieHeader, readCookie, lockedFor, noteFail, clearFail, sameOrigin } from './panel/auth.js';
 import { write as logWrite } from './store/logs.js';
 import { ensureSchema } from './store/db.js';
@@ -25,11 +26,38 @@ async function handleFetch(request, env, ctx) {
       }
 
       // 公开首页:不依赖管理员变量/D1/KV,先于 503 守卫返回。
-      if (path === '/') return homePage();
+      if (path === '/') {
+        const settings = await getRaw(env).catch(() => null);
+        return homePage(settings);
+      }
 
       if (missing.length) {
         return page('503', '服务还没有初始化完成:管理员账号未设置,面板登录已关闭', 503,
           '请在 Cloudflare 后台配置 ADMIN_USER / ADMIN_PASS 两个环境变量,然后刷新本页');
+      }
+
+      if (path.startsWith('/confirm/')) {
+        if (!env.BOT_CORE) return page('404', '确认功能未启用');
+        const token = decodeURIComponent(path.slice('/confirm/'.length));
+        const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
+        if (request.method === 'POST') {
+          const form = await request.formData().catch(() => null);
+          const action = form?.get('action');
+          const r = await stub.fetch('https://do/pending/resolve', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token, approve: action === 'approve' }),
+          });
+          const data = await r.json().catch(() => ({ error: '确认失败' }));
+          return html(confirmPage({ token, result: data, error: data.error || '' }));
+        }
+        const r = await stub.fetch('https://do/pending/get', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+        });
+        const pending = await r.json().catch(() => null);
+        return html(confirmPage({ token, pending }));
       }
 
       // 搜索引擎和扫描器都会来要这个文件;顺手告诉它们别碰管理面板
@@ -51,6 +79,10 @@ async function handleFetch(request, env, ctx) {
       if (path === '/api' || path.startsWith('/api/')) {
         if (!env.DB || !env.STORE) return notReady(env);
         return await handleSiteApi(env, cfg, request, url);
+      }
+
+      if (path.startsWith('/media/')) {
+        return await serveMedia(env, request, url);
       }
 
       const { id } = splitSitePath(path);
@@ -198,5 +230,9 @@ async function panel(request, env, url, missing) {
   if (!settings) {
     return html(loginPage({ error: 'D1 数据库没有绑定,请先在 Cloudflare 后台绑定名为 DB 的 D1 数据库' }));
   }
-  return html(panelPage({ user: env.ADMIN_USER }));
+  return html(panelPage({
+    user: env.ADMIN_USER,
+    version: settings.ui?.panelVersion === 'v2' ? 'v2' : 'v1',
+    accent: settings.ui?.accent || 'blue',
+  }));
 }

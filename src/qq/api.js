@@ -59,8 +59,22 @@ export function sendGroupMessage(cfg, token, o) {
   return post(cfg, token, `/v2/groups/${encodeURIComponent(o.groupOpenid)}/messages`, body);
 }
 
+export function sendGroupMarkdown(cfg, token, o) {
+  const body = { msg_type: 2, markdown: { content: String(o.content) } };
+  if (o.msgId) body.msg_id = o.msgId;
+  if (o.msgSeq !== undefined) body.msg_seq = o.msgSeq;
+  return post(cfg, token, `/v2/groups/${encodeURIComponent(o.groupOpenid)}/messages`, body);
+}
+
 export function sendC2CMessage(cfg, token, o) {
   const body = { msg_type: 0, content: String(o.content) };
+  if (o.msgId) body.msg_id = o.msgId;
+  if (o.msgSeq !== undefined) body.msg_seq = o.msgSeq;
+  return post(cfg, token, `/v2/users/${encodeURIComponent(o.openid)}/messages`, body);
+}
+
+export function sendC2CMarkdown(cfg, token, o) {
+  const body = { msg_type: 2, markdown: { content: String(o.content) } };
   if (o.msgId) body.msg_id = o.msgId;
   if (o.msgSeq !== undefined) body.msg_seq = o.msgSeq;
   return post(cfg, token, `/v2/users/${encodeURIComponent(o.openid)}/messages`, body);
@@ -107,11 +121,21 @@ export function explainError(data) {
   return `${code} ${map[code] || data?.message || ''}`.trim();
 }
 
-function sendOne(cfg, token, target, content, { mode, msgId, msgSeq }) {
+function sendOne(cfg, token, target, content, { mode, msgId, msgSeq, markdown = false }) {
   if (mode === 'active') {
+    if (markdown) {
+      return target.kind === 'group'
+        ? sendGroupMarkdown(cfg, token, { groupOpenid: target.id, content })
+        : sendC2CMarkdown(cfg, token, { openid: target.id, content });
+    }
     return target.kind === 'group'
       ? sendActiveGroupMessage(cfg, token, target.id, content)
       : sendActiveC2CMessage(cfg, token, target.id, content);
+  }
+  if (markdown) {
+    return target.kind === 'group'
+      ? sendGroupMarkdown(cfg, token, { groupOpenid: target.id, content, msgId, msgSeq })
+      : sendC2CMarkdown(cfg, token, { openid: target.id, content, msgId, msgSeq });
   }
   return target.kind === 'group'
     ? sendGroupMessage(cfg, token, { groupOpenid: target.id, content, msgId, msgSeq })
@@ -127,7 +151,16 @@ export async function deliver(cfg, token, target, opts = {}) {
 
   for (const raw of chunks) {
     let content = raw;
-    let r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq });
+    let r;
+    if (opts.markdown) {
+      r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq, markdown: true });
+      if (!r.ok) {
+        errors.push('Markdown 发送失败,已退回纯文本');
+        r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq });
+      }
+    } else {
+      r = await sendOne(cfg, token, target, content, { mode, msgId, msgSeq: seq });
+    }
 
     if (!r.ok && r.data?.code === ERR_URL_FORBIDDEN) {
       const stripped = content.replace(/https?:\/\//g, '');
@@ -168,6 +201,73 @@ export async function deliver(cfg, token, target, opts = {}) {
   }
 
   return { sent, errors, mode };
+}
+
+function bytesToBase64(bytes) {
+  let s = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(s);
+}
+
+export async function uploadMedia(cfg, token, target, { fileType = 1, bytes, fileName = '', url = '' } = {}) {
+  const path = target.kind === 'group'
+    ? `/v2/groups/${encodeURIComponent(target.id)}/files`
+    : `/v2/users/${encodeURIComponent(target.id)}/files`;
+  const body = {
+    file_type: Number(fileType) || 1,
+    srv_send_msg: false,
+  };
+  if (url) body.url = String(url);
+  else body.file_data = bytesToBase64(bytes || new Uint8Array(0));
+  if (fileName) body.file_name = String(fileName).slice(0, 120);
+  return await post(cfg, token, path, body);
+}
+
+export async function sendMediaMessage(cfg, token, target, { fileInfo, msgId, msgSeq, mode = 'passive' } = {}) {
+  const body = { msg_type: 7, media: { file_info: String(fileInfo || '') } };
+  if (mode !== 'active') {
+    if (msgId) body.msg_id = msgId;
+    if (msgSeq) body.msg_seq = msgSeq;
+  }
+  const path = target.kind === 'group'
+    ? `/v2/groups/${encodeURIComponent(target.id)}/messages`
+    : `/v2/users/${encodeURIComponent(target.id)}/messages`;
+  return await post(cfg, token, path, body);
+}
+
+export async function deliverMedia(cfg, token, target, media, opts = {}) {
+  const up = await uploadMedia(cfg, token, target, media);
+  if (!up.ok || !up.data?.file_info) {
+    return { ok: false, error: explainError(up.data), fileInfo: '' };
+  }
+  const r = await sendMediaMessage(cfg, token, target, {
+    fileInfo: up.data.file_info,
+    msgId: opts.msgId,
+    msgSeq: opts.msgSeq,
+    mode: opts.mode,
+  });
+  return {
+    ok: r.ok,
+    error: r.ok ? '' : explainError(r.data),
+    fileInfo: up.data.file_info,
+  };
+}
+
+export async function muteGroupMember(cfg, token, groupOpenid, memberOpenid, seconds = 600) {
+  const sec = Math.max(1, Math.min(30 * 24 * 3600, Number(seconds) || 600));
+  const expire = new Date(Date.now() + sec * 1000).toISOString();
+  return await post(cfg, token, `/v2/groups/${encodeURIComponent(groupOpenid)}/restrict_chat_setting`, {
+    members: [{ op: 'add', member_openid: String(memberOpenid), mute_expire_at: expire }],
+  });
+}
+
+export async function unmuteGroupMember(cfg, token, groupOpenid, memberOpenid) {
+  return await post(cfg, token, `/v2/groups/${encodeURIComponent(groupOpenid)}/restrict_chat_setting`, {
+    members: [{ op: 'remove', member_openid: String(memberOpenid) }],
+  });
 }
 
 function chunkRaw(text, size) {

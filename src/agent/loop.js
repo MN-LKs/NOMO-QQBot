@@ -8,7 +8,7 @@ import { listSkills, pickSkills } from './skills.js';
 import { loadExts, enabledToolSet, externalToolDefs, runExternalTool } from './exts.js';
 import { listModules, agentModules, siteModules } from '../store/modules.js';
 
-export async function runAgent({ cfg, core, convId, userText, meta = {}, log = console.log }) {
+export async function runAgent({ cfg, core, convId, userText, images = [], meta = {}, log = console.log }) {
   const started = Date.now();
   // 总预算:0 表示不限制(大工程多轮工具调用需要多久就多久,只受轮次上限约束)
   const totalBudgetMs = Math.max(0, Number(cfg.agentBudgetMs) || 0);
@@ -45,7 +45,7 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
   }
 
   const tools = [...buildTools(cfg, { toolSet, modules, prefabList, externalDefs: extTools.defs }), ...mcp.defs];
-  const ctx = { cfg, core, convId, modules: new Map(modules.map((m) => [m.id, m])), log };
+  const ctx = { cfg, core, convId, meta, modules: new Map(modules.map((m) => [m.id, m])), log };
 
   const conv = await core.getContext(convId);
   const messages = [{ role: 'system', content: buildSystemPrompt(cfg, { ...meta, skills, prefabList }) }];
@@ -68,7 +68,17 @@ export async function runAgent({ cfg, core, convId, userText, meta = {}, log = c
 
   let speaker = userText;
   if (meta.nickname) speaker = `[${meta.nickname}] ${userText}`;
-  messages.push({ role: 'user', content: speaker });
+  if (Array.isArray(images) && images.length) {
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: speaker },
+        ...images.map((url) => ({ type: 'image_url', image_url: { url } })),
+      ],
+    });
+  } else {
+    messages.push({ role: 'user', content: speaker });
+  }
 
   const toolTrace = [];
   let final = '';

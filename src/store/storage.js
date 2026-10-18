@@ -196,7 +196,7 @@ export async function addUsage(env, storeId, bytesDelta, filesDelta = 0) {
   }
 }
 
-export async function scanStore(env, store) {
+export async function scanStore(env, store, { prefix = '' } = {}) {
   const av = availability(env, store);
   if (!av.ok) return { error: av.reason };
   const ad = getAdapter(env, store);
@@ -204,7 +204,7 @@ export async function scanStore(env, store) {
   let bytes = 0;
   let files = 0;
   for (let i = 0; i < 50; i++) {
-    const page = await ad.list({ prefix: 'f/', cursor, limit: 1000 });
+    const page = await ad.list({ prefix, cursor, limit: 1000 });
     for (const k of page.keys) {
       bytes += Number(k.size || 0);
       files++;
@@ -213,7 +213,7 @@ export async function scanStore(env, store) {
     cursor = page.cursor;
   }
   await addUsageRaw(env, store.id, bytes, files);
-  return { bytes, files };
+  return { bytes, files, providerMaxBytes: providerMaxBytes(store) };
 }
 
 async function addUsageRaw(env, storeId, bytes, files) {
@@ -340,6 +340,106 @@ export async function listObjects(env, storeId, { prefix = 'f/', cursor, limit =
   if (!av.ok) return { error: av.reason };
   const page = await getAdapter(env, s).list({ prefix, cursor, limit });
   return { storeId: s.id, ...page };
+}
+
+/**
+ * 服务商容量上限的启发式识别。
+ * S3 协议本身不返回配额,所以只能按端点/类型给一个「服务商上限」参考值;
+ * 用户自己填的 maxBytes 仍然是实际写入上限。
+ */
+export function providerMaxBytes(store) {
+  const kind = String(store?.kind || '');
+  const ep = String(store?.endpoint || '').toLowerCase();
+  if (kind === 'kv') return KV_DEFAULT_BYTES;
+  if (kind === 'r2' || ep.includes('r2.cloudflarestorage.com')) return R2_DEFAULT_BYTES;
+  if (ep.includes('filebase')) return 5 * 1024 ** 3;
+  if (ep.includes('backblaze') || ep.includes('b2')) return 10 * 1024 ** 3;
+  if (ep.includes('minio')) return 0;
+  return S3_DEFAULT_BYTES;
+}
+
+function findStore(settings, env, storeId) {
+  const s = resolveStores(settings, env).find((x) => x.id === String(storeId || ''));
+  if (!s) return { error: '存储不存在' };
+  const av = availability(env, s);
+  if (!av.ok) return { error: av.reason };
+  return { store: s, adapter: getAdapter(env, s) };
+}
+
+function safeKey(key) {
+  const k = String(key || '').trim();
+  if (!k || k.length > 512) return '';
+  if (/[\u0000-\u001f]/.test(k)) return '';
+  return k;
+}
+
+export async function storeDetail(env, storeId, { prefix = '', cursor, limit = 100 } = {}) {
+  const settings = await getRaw(env, { fresh: true });
+  const found = findStore(settings, env, storeId);
+  if (found.error) return { error: found.error };
+  const { store, adapter } = found;
+  const page = await adapter.list({ prefix, cursor, limit });
+  const usage = await usageMap(env);
+  const u = usage[store.id] || { bytes: 0, files: 0 };
+  return {
+    store: {
+      id: store.id,
+      kind: store.kind,
+      name: store.name || store.id,
+      builtin: !!store.builtin,
+      enabled: !!store.enabled,
+      priority: Number(store.priority) || 0,
+      maxBytes: Number(store.maxBytes) || 0,
+      providerMaxBytes: providerMaxBytes(store),
+      endpoint: store.endpoint || '',
+      bucket: store.bucket || '',
+      region: store.region || '',
+      pathStyle: store.pathStyle !== false,
+      usedBytes: u.bytes,
+      files: u.files,
+    },
+    ...page,
+  };
+}
+
+export async function readStoreFile(env, storeId, key) {
+  const k = safeKey(key);
+  if (!k) return { error: '文件路径不合法' };
+  const settings = await getRaw(env, { fresh: true });
+  const found = findStore(settings, env, storeId);
+  if (found.error) return { error: found.error };
+  const bytes = await found.adapter.get(k);
+  if (!bytes) return { error: '文件不存在' };
+  return { bytes, storeId: found.store.id, key: k };
+}
+
+export async function writeStoreFile(env, storeId, key, bytes, contentType = '') {
+  const k = safeKey(key);
+  if (!k) return { error: '文件路径不合法' };
+  const size = bytes.byteLength ?? bytes.length ?? 0;
+  if (size > 2 * 1024 * 1024) return { error: '单个文件不能超过 2 MB' };
+  const settings = await getRaw(env, { fresh: true });
+  const found = findStore(settings, env, storeId);
+  if (found.error) return { error: found.error };
+  const { store, adapter } = found;
+  const oldSize = await adapter.head(k).catch(() => null);
+  await adapter.put(k, bytes, contentType);
+  await addUsage(env, store.id, size - (Number(oldSize) || 0), oldSize === null ? 1 : 0);
+  return { ok: true, key: k, bytes: size };
+}
+
+export async function deleteStoreFile(env, storeId, key) {
+  const k = safeKey(key);
+  if (!k) return { error: '文件路径不合法' };
+  const settings = await getRaw(env, { fresh: true });
+  const found = findStore(settings, env, storeId);
+  if (found.error) return { error: found.error };
+  const { store, adapter } = found;
+  const size = await adapter.head(k).catch(() => null);
+  if (size === null) return { error: '文件不存在' };
+  await adapter.delete(k);
+  await addUsage(env, store.id, -Number(size || 0), -1);
+  return { ok: true, key: k };
 }
 
 // ---------------------------------------------------------------------------
