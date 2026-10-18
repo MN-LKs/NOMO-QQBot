@@ -95,6 +95,7 @@ export async function lockedFor(env, ip) {
 }
 
 export async function noteFail(env, ip) {
+  if (!env?.DB) return { fails: 1, until: 0 };
   await ensureSchema(env.DB);
   const r = await one(env.DB, 'SELECT fails FROM logins WHERE ip = ?', ip);
   const fails = Number(r?.fails || 0) + 1;

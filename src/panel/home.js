@@ -11,6 +11,8 @@ export function homePage(settings = null) {
   const subtitle = String(hp.subtitle || 'QQ 群聊 · AI 助手');
   const description = String(hp.description || 'NOMO 是一个跑在 Cloudflare Workers 上的 QQ 机器人。它能聊天、能搜索、能调用工具,还能在群里直接生成并部署一个临时网页。没有服务器,没有常驻进程,闲时自动休眠。');
   const github = String(hp.github || 'https://github.com/MN-LKs/NOMO-QQBot');
+  const siteBase = String(settings?.site?.publicBaseUrl || 'https://example.com').replace(/\/$/, '');
+  const demoUrl = `${siteBase}/xxxxxxxx`;
   const showGithub = hp.showGithub !== false;
   const esc = (s) => String(s ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -19,6 +21,15 @@ export function homePage(settings = null) {
     return new Response('首页未启用', {
       status: 404,
       headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+    });
+  }
+  if (hp.custom === true && String(hp.html || '').trim()) {
+    return new Response(String(hp.html), {
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      },
     });
   }
   const html = `<!DOCTYPE html>
@@ -128,7 +139,7 @@ h1 .g{background:linear-gradient(110deg,#dbeafe 5%,#8bb8ff 38%,#c4b5fd 72%,#f0ab
       <div class="bar"><i></i><i></i><i></i></div>
       <div class="msg u"><span class="avatar u">你</span><div class="bubble">/AI 帮我查一下这周的天气,再做个页面</div></div>
       <div class="msg b"><span class="avatar b">N</span><div class="bubble">收到,我先查天气,再把结果做成一个可以直接打开的页面。<br><span class="tag">工具调用 · search_web</span></div></div>
-      <div class="msg t"><span class="avatar b">N</span><div class="bubble">页面已经部署好了:<br><span style="color:#9cc4ff">https://ai.sgnc.de5.net/xxxxxxxx</span><br><span class="tag">存活 10 分钟 · 自动销毁</span></div></div>
+      <div class="msg t"><span class="avatar b">N</span><div class="bubble">页面已经部署好了:<br><span style="color:#9cc4ff">${esc(demoUrl)}</span><br><span class="tag">存活 10 分钟 · 自动销毁</span></div></div>
     </div>
   </section>
 

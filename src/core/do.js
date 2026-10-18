@@ -59,6 +59,8 @@ export class BotCore {
           return json(await this.status());
         case '/apply':
           return json(await this.apply());
+        case '/reset':
+          return json(await this.resetState());
         case '/ws':
           return json(await wsEnsure(this));
         case '/ws/start':
@@ -154,6 +156,20 @@ export class BotCore {
     if (pending > 0) this.armAlarm(500);
     else if (cfg.mode === 'websocket' && (!this.ws || this.wsState !== 'open')) this.armAlarm(60000);
     return { ok: true, processed, pending, ws: wsStatus(this), note };
+  }
+
+  async resetState() {
+    const tables = ['kv', 'conv', 'msg', 'jobs', 'mem', 'fs', 'gmsg', 'pending'];
+    for (const t of tables) {
+      try {
+        this.sql.exec(`DELETE FROM ${t}`);
+      } catch {
+        /* 旧版本可能还没有这张表 */
+      }
+    }
+    this._cfg = null;
+    this._cfgAt = 0;
+    return { ok: true };
   }
 
   async apply() {

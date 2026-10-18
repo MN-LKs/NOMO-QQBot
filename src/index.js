@@ -4,6 +4,7 @@ import { handleWebhook } from './qq/webhook.js';
 import { serveSite, splitSitePath, page, handleSiteApi, serveMedia, RESERVED } from './serve.js';
 import { isSiteId } from './util/id.js';
 import { BotCore } from './core/do.js';
+import { execBackend, normalizeBackendResult } from './core/backend.js';
 import { handlePanelApi, jsonRes } from './panel/api.js';
 import { loginPage, panelPage, lockedPage } from './panel/ui.js';
 import { homePage } from './panel/home.js';
@@ -85,6 +86,10 @@ async function handleFetch(request, env, ctx) {
         return await serveMedia(env, request, url);
       }
 
+      if (path.startsWith('/home-api/')) {
+        return await handleHomeApi(env, request, url);
+      }
+
       const { id } = splitSitePath(path);
       if (id && !RESERVED.has(id.toLowerCase())) {
         // 扫描器天天在找 /env.dev、/.env 这类文件:形状不对的直接 404,不去碰数据库
@@ -133,6 +138,38 @@ export default {
   },
 };
 
+// 自定义首页后端:由管理员在「首页配置」里写 JS,沙盒执行 /home-api/*
+async function handleHomeApi(env, request, url) {
+  if (request.method !== 'GET' && request.method !== 'POST') {
+    return jsonRes({ error: '只支持 GET / POST' }, 405);
+  }
+  const settings = await getRaw(env).catch(() => null);
+  const code = String(settings?.ui?.homepage?.backend || '').trim();
+  if (!code) return jsonRes({ error: '首页后端还没有配置' }, 404);
+  const body = request.method === 'POST' ? await request.text() : '';
+  if (body.length > 256 * 1024) return jsonRes({ error: '请求体太大' }, 413);
+  const r = await execBackend(code, {
+    method: request.method,
+    path: url.pathname.replace(/^\/home-api\/?/, ''),
+    query: Object.fromEntries(url.searchParams),
+    body,
+    json: () => JSON.parse(body || '{}'),
+    fetch: (u, init) => fetch(u, init),
+    now: () => Date.now(),
+  }, { timeoutMs: 5000 });
+  if (!r.ok) return jsonRes({ error: `首页后端执行失败:${r.error}` }, 500);
+  const out = normalizeBackendResult(r.value);
+  return new Response(out.body, {
+    status: out.status,
+    headers: {
+      'Content-Type': out.contentType,
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      ...out.headers,
+    },
+  });
+}
+
 function html(body, status = 200, extra = {}) {
   return new Response(body, {
     status,
@@ -165,16 +202,9 @@ async function panel(request, env, url, missing) {
     return html(lockedPage());
   }
 
-  // D1 / KV 没绑定时,面板接口和页面都直接给可读提示,
-  // 不要放进去让 env.DB.prepare 抛 "Cannot read properties of undefined"。
+  // D1 / KV 没绑定时不再直接锁死面板:允许用管理员账号登录,
+  // 页面会显示缺什么配置;依赖 D1/KV 的接口会返回明确错误。
   const noStore = missingStorage(env);
-  if (noStore.length) {
-    const msg = `没有正确配置并连接 ${noStore.join('、')}`;
-    if (path.startsWith(`${FIXED.panelPath}/api/`)) {
-      return jsonRes({ error: msg, missing: noStore }, 503);
-    }
-    return page('503', msg, 503, '请在 Cloudflare 后台绑定后刷新本页');
-  }
 
   if (path === `${FIXED.panelPath}/api/login`) {
     if (request.method !== 'POST') return jsonRes({ error: '只接受 POST' }, 405);
@@ -234,5 +264,8 @@ async function panel(request, env, url, missing) {
     user: env.ADMIN_USER,
     version: settings.ui?.panelVersion === 'v2' ? 'v2' : 'v1',
     accent: settings.ui?.accent || 'blue',
+    appVersion: FIXED.appVersion,
+    checkUpdates: settings.update?.check !== false,
+    warnings: noStore.map((x) => `没有绑定 ${x},依赖它的功能暂时不可用。`),
   }));
 }

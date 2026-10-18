@@ -24,6 +24,8 @@ export const FIXED = {
   skillMaxInject: 6000,
   moduleMaxCode: 20000,
   siteApiPerMinute: 60,
+  appVersion: '4.1.0',
+  updateRepo: 'MN-LKs/NOMO-QQBot',
 };
 
 export const ENV_VARS = ['ADMIN_USER', 'ADMIN_PASS'];
@@ -115,6 +117,7 @@ export const DEFAULT_SETTINGS = {
     apiPerMinute: 60,
   },
   logs: { debug: false, retentionDays: 7, maxRows: 8000 },
+  update: { check: true, repo: 'MN-LKs/NOMO-QQBot', deployHook: '' },
   motd: {
     enabled: true,
     textApi: 'https://motd.txssb.cn/api/status',
@@ -298,6 +301,9 @@ export function flatten(settings, env = {}) {
     groupsCacheEnabled: groups.cacheEnabled !== false,
     groupsCachePerGroup: Math.max(20, Math.min(2000, Number(groups.cachePerGroup) || 300)),
     groupsCacheRetentionDays: Math.max(1, Math.min(90, Number(groups.cacheRetentionDays) || 7)),
+    updateCheck: settings.update?.check !== false,
+    updateRepo: String(settings.update?.repo || FIXED.updateRepo).trim(),
+    updateDeployHook: String(settings.update?.deployHook || '').trim(),
     motdEnabled: settings.motd?.enabled !== false,
     motdTextApi: String(settings.motd?.textApi || '').trim(),
     motdImageApi: String(settings.motd?.imageApi || '').trim(),

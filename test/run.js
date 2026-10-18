@@ -16,6 +16,7 @@ import { pickSkills, parseSkillDoc, parseTriggers } from '../src/agent/skills.js
 import { parseMotdTarget, formatMotdText } from '../src/agent/motd.js';
 import { normaliseEvent } from '../src/qq/webhook.js';
 import { buildMenuText, buildHelpMarkdown } from '../src/agent/prompt.js';
+import { formatDashboard } from '../src/agent/exec.js';
 import { resolveStores, availability } from '../src/store/storage.js';
 import { uriEncode, sha256Hex } from '../src/store/s3.js';
 import { execFileSync } from 'node:child_process';
@@ -96,6 +97,19 @@ ok('MOTD 文本包含人数', formatMotdText({ ok: true, online: true, host: 'a:
 }
 ok('菜单包含状态指令', buildMenuText({ canDeploy: true, motdEnabled: true }, { markdown: true }).includes('/状态'));
 ok('帮助 Markdown 有标题', buildHelpMarkdown({ canDeploy: false, motdEnabled: true }).includes('## '));
+{
+  const text = formatDashboard({ data: {
+    realtime: { all_requests: 100, all_tokens: 2000 },
+    windows: { today: { requests: 5, tokens: 100 }, week: { requests: 20, tokens: 500 } },
+    model_ranking: [{ model_name: 'm1', requests: 10, tokens: 100 }],
+    user_ranking: [{ username: 'u1', requests: 3 }],
+    recent: [{ username: 'u1', model_name: 'm1', tokens: 10, created_at: Math.floor(Date.now() / 1000) - 60 }],
+  } });
+  ok('中转站累计与本周', text.includes('累计') && text.includes('本周'));
+  ok('中转站模型排行', text.includes('模型排行') && text.includes('m1'));
+  ok('中转站用户排行', text.includes('用户排行') && text.includes('u1'));
+  ok('中转站最近调用', text.includes('最近调用'));
+}
 {
   const toml = fs.readFileSync(path.join(ROOT, 'wrangler.toml'), 'utf8');
   ok('wrangler.toml 开启 keep_vars', /^keep_vars\s*=\s*true/m.test(toml));
@@ -367,6 +381,11 @@ function extractScripts(html) {
   ok('首页读取配置标题', html.includes('测试站'));
   ok('首页读取配置介绍', html.includes('测试介绍'));
   ok('首页读取 GitHub 地址', html.includes('https://example.com/repo'));
+  ok('首页默认示例域名', html.includes('https://example.com/xxxxxxxx'));
+  const customHtml = await homePage({ site: { publicBaseUrl: 'https://my.example.com' } }).text();
+  ok('首页使用面板站点域名', customHtml.includes('https://my.example.com/xxxxxxxx'));
+  const ownHtml = await homePage({ ui: { homepage: { custom: true, html: '<h1>我的首页</h1>' } } }).text();
+  ok('首页支持自定义 HTML', ownHtml.includes('<h1>我的首页</h1>'));
   const off = homePage({ ui: { homepage: { enabled: false } } });
   eq('首页可关闭', off.status, 404);
 }

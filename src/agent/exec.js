@@ -73,10 +73,10 @@ async function fetchText(url, { timeoutMs = 20000, maxBytes = 800000 } = {}) {
   }
 }
 
-/** 查询中转站用量面板(默认 nexacode 面板接口,可在设置里改) */
+/** 查询中转站用量面板(地址在 Agent 配置里填,不写死) */
 export async function queryDashboard(cfg) {
   const url = String(cfg.dashboardUrl || '').trim();
-  if (!url) return '还没有配置中转站用量面板地址,请管理员在面板「设置 → AI 接口」里填写。';
+  if (!url) return '还没有配置中转站用量面板地址,请管理员在「Agent 配置 → 大模型接口 → 中转站用量面板地址」里填写。';
   let json;
   try {
     const res = await fetch(url, {
@@ -88,18 +88,91 @@ export async function queryDashboard(cfg) {
   } catch (e) {
     return `查询中转站用量失败:${e?.message || e}。可以稍后再试,或者告诉用户暂时查不了。`;
   }
+  return formatDashboard(json);
+}
+
+function pickArray(obj, paths) {
+  for (const path of paths) {
+    let cur = obj;
+    for (const part of path.split('.')) {
+      cur = cur?.[part];
+    }
+    if (Array.isArray(cur) && cur.length) return cur;
+  }
+  return [];
+}
+
+function numOf(...vals) {
+  for (const v of vals) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function metricText(label, requests, tokens, users) {
+  const parts = [];
+  if (requests !== null) parts.push(`${fmtNum(requests)} 次请求`);
+  if (tokens !== null) parts.push(`${fmtNum(tokens)} tokens`);
+  if (users !== null) parts.push(`${fmtNum(users)} 人`);
+  return parts.length ? `· ${label}:${parts.join(' / ')}` : '';
+}
+
+export function formatDashboard(json) {
   const d = json?.data && typeof json.data === 'object' ? json.data : json;
   const rt = d?.realtime || {};
-  const today = d?.windows?.today || {};
-  const lines = ['📊 AI 中转站实时用量(数据来自中转站面板)'];
-  if (rt.all_requests !== undefined) lines.push(`· 累计请求:${fmtNum(rt.all_requests)} 次`);
-  if (rt.all_tokens !== undefined) lines.push(`· 累计 tokens:${fmtNum(rt.all_tokens)}`);
-  if (today.requests !== undefined) lines.push(`· 今日:${fmtNum(today.requests)} 次请求 / ${fmtNum(today.tokens)} tokens`);
-  const quota = Number(d?.totals?.quota);
-  if (Number.isFinite(quota) && quota > 0) {
+  const w = d?.windows || {};
+  const today = w.today || d?.today || {};
+  const week = w.week || w.this_week || d?.week || {};
+  const month = w.month || d?.month || {};
+  const lines = ['📊 AI 中转站用量(数据来自中转站面板)'];
+
+  const totalReq = numOf(rt.all_requests, d?.total_requests, d?.all_requests, d?.requests);
+  const totalTok = numOf(rt.all_tokens, d?.total_tokens, d?.all_tokens, d?.tokens);
+  const totalLine = metricText('累计请求', totalReq, totalTok);
+  if (totalLine) lines.push(totalLine);
+
+  const todayLine = metricText('今日', numOf(today.requests, today.calls), numOf(today.tokens), numOf(today.users, today.active_users));
+  if (todayLine) lines.push(todayLine);
+  const weekLine = metricText('本周', numOf(week.requests, week.calls), numOf(week.tokens), numOf(week.users, week.active_users));
+  if (weekLine) lines.push(weekLine);
+  const monthLine = metricText('本月', numOf(month.requests, month.calls), numOf(month.tokens), numOf(month.users, month.active_users));
+  if (monthLine) lines.push(monthLine);
+
+  const quota = numOf(d?.totals?.quota, d?.quota, d?.remaining_quota);
+  if (quota !== null && quota > 0) {
     lines.push(`· 剩余额度:${fmtNum(quota)} 点(约 $${(quota / 500000).toFixed(2)},换算以面板为准)`);
   }
-  const recent = Array.isArray(d?.recent) ? d.recent.slice(0, 5) : [];
+
+  const models = pickArray(d, [
+    'model_ranking', 'modelRanking', 'model_stats', 'modelStats',
+    'rankings.models', 'stats.models', 'models',
+  ]);
+  if (models.length) {
+    lines.push('· 模型排行:');
+    models.slice(0, 8).forEach((m, i) => {
+      const name = m?.model_name || m?.model || m?.name || m?.id || '?';
+      const req = numOf(m?.requests, m?.count, m?.calls, m?.total);
+      const tok = numOf(m?.tokens, m?.total_tokens);
+      lines.push(`  ${i + 1}. ${name}${req !== null ? ` · ${fmtNum(req)} 次` : ''}${tok !== null ? ` · ${fmtNum(tok)} tokens` : ''}`);
+    });
+  }
+
+  const users = pickArray(d, [
+    'user_ranking', 'userRanking', 'user_stats', 'userStats',
+    'rankings.users', 'stats.users', 'users',
+  ]);
+  if (users.length) {
+    lines.push('· 用户排行:');
+    users.slice(0, 8).forEach((u, i) => {
+      const name = u?.username || u?.user || u?.name || u?.email || u?.id || '?';
+      const req = numOf(u?.requests, u?.count, u?.calls, u?.total);
+      const tok = numOf(u?.tokens, u?.total_tokens);
+      lines.push(`  ${i + 1}. ${name}${req !== null ? ` · ${fmtNum(req)} 次` : ''}${tok !== null ? ` · ${fmtNum(tok)} tokens` : ''}`);
+    });
+  }
+
+  const recent = Array.isArray(d?.recent) ? d.recent.slice(0, 8) : [];
   if (recent.length) {
     lines.push('· 最近调用:');
     const nowSec = Number(rt.now) || Math.floor(Date.now() / 1000);
@@ -107,6 +180,10 @@ export async function queryDashboard(cfg) {
       const ago = r.created_at ? `${timeAgo(nowSec - Number(r.created_at))}前` : '';
       lines.push(`  · ${r.username || '?'} | ${r.model_name || '?'} | ${fmtNum(r.tokens)} tokens${ago ? ` | ${ago}` : ''}`);
     }
+  }
+
+  if (lines.length === 1) {
+    lines.push('· 接口没有返回可识别的用量字段;可以检查面板地址是否正确,或把接口原始字段发给管理员。');
   }
   return lines.join('\n');
 }

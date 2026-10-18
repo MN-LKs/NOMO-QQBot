@@ -1,5 +1,5 @@
 import { FIXED, missingEnv, normalizeApiBase, normalizeBaseUrl } from '../config.js';
-import { getRaw, savePatch, maskSecrets, loadCfg } from '../store/settings.js';
+import { getRaw, savePatch, maskSecrets, loadCfg, invalidate } from '../store/settings.js';
 import { list as logList, clear as logClear, cleanup as logCleanup, count as logCount, write as logWrite } from '../store/logs.js';
 import { overview } from '../store/stats.js';
 import * as P from '../store/projects.js';
@@ -17,6 +17,7 @@ import { loadExts, saveExt, removeExt } from '../agent/exts.js';
 import { execBackend, sandboxFetch } from '../core/backend.js';
 import { parseMotdTarget, queryMotd, formatMotdText } from '../agent/motd.js';
 import { enhanceFiles } from '../util/seo.js';
+import { checkCredentials } from './auth.js';
 
 const JSON_H = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
 
@@ -67,6 +68,11 @@ export async function handlePanelApi(request, env, url, ctx) {
     }
     if (path === '/me') {
       return jsonRes({ user: env.ADMIN_USER, missing: missingEnv(env) });
+    }
+
+    if (!env.DB && !(path === '/me' || (path === '/settings' && method === 'GET')
+      || path === '/update/check' || path === '/update/deploy')) {
+      return jsonRes({ error: '没有绑定 D1 数据库(DB),这个功能暂时不可用;绑定后刷新本页。', missing: ['D1 数据库(DB)'] }, 503);
     }
 
     if (path === '/overview') {
@@ -292,6 +298,77 @@ export async function handlePanelApi(request, env, url, ctx) {
       if (body.action !== 'remove') list.unshift({ openid, addedAt: Date.now() });
       await savePatch(env, { admin: { openIds: list } });
       return jsonRes({ ok: true, list });
+    }
+
+    if (path === '/update/check' && (method === 'GET' || method === 'POST')) {
+      const cfg = await loadCfg(env).catch(() => ({}));
+      return jsonRes(await checkUpdate(cfg));
+    }
+
+    if (path === '/update/deploy' && method === 'POST') {
+      const cfg = await loadCfg(env).catch(() => ({}));
+      const hook = String(cfg.updateDeployHook || '').trim();
+      if (!hook) return jsonRes({ error: '没有配置 Cloudflare Deploy Hook,无法触发自动更新' }, 400);
+      try {
+        const res = await fetch(hook, { method: 'POST', headers: { 'User-Agent': 'NOMO-QQBot' } });
+        return jsonRes({ ok: res.ok, status: res.status, note: res.ok ? '已触发部署,Cloudflare 会开始构建' : `Deploy Hook 返回 HTTP ${res.status}` });
+      } catch (e) {
+        return jsonRes({ error: `触发部署失败:${e?.message || e}` }, 502);
+      }
+    }
+
+    if (path === '/reset' && method === 'POST') {
+      if (!checkCredentials(env, body?.user, body?.pass)) {
+        return jsonRes({ error: '管理员用户名或密码不对' }, 401);
+      }
+      if (!env.DB) return jsonRes({ error: '没有绑定 D1,无法重置配置和项目数据' }, 400);
+      const tables = ['settings', 'stats', 'daily', 'groups', 'projects', 'files', 'sdata',
+        'admins', 'mcp', 'logins', 'usage', 'logs', 'stusage', 'skills', 'exts', 'modules', 'meta'];
+      await env.DB.batch(tables.map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
+      invalidate();
+
+      let kvDeleted = 0;
+      if (env.STORE) {
+        let cursor;
+        for (let i = 0; i < 10; i++) {
+          const page = await env.STORE.list({ limit: 1000, cursor });
+          for (const k of page.keys || []) {
+            await env.STORE.delete(k.name);
+            kvDeleted++;
+          }
+          if (page.list_complete || !page.cursor) break;
+          cursor = page.cursor;
+        }
+      }
+
+      let r2Deleted = 0;
+      if (env.R2) {
+        let cursor;
+        for (let i = 0; i < 10; i++) {
+          const page = await env.R2.list({ limit: 1000, cursor });
+          for (const o of page.objects || []) {
+            await env.R2.delete(o.key);
+            r2Deleted++;
+          }
+          if (page.truncated === false || !page.cursor) break;
+          cursor = page.cursor;
+        }
+      }
+
+      if (env.BOT_CORE) {
+        try {
+          const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
+          await stub.fetch('https://do/reset', { method: 'POST' });
+        } catch {
+          /* DO 重置失败不挡 D1 已清空 */
+        }
+      }
+      return jsonRes({
+        ok: true,
+        kvDeleted,
+        r2Deleted,
+        note: `已重置。D1 表已清空,KV 删除 ${kvDeleted} 个键,R2 删除 ${r2Deleted} 个对象;S3 物理文件需在服务商后台删除。`,
+      });
     }
 
     return jsonRes({ error: 'not found', path }, 404);
@@ -830,4 +907,59 @@ async function coreApply(env, ctx) {
   } catch (e) {
     return `应用到机器人失败:${String(e?.message || e)}`;
   }
+}
+
+function versionParts(v) {
+  return String(v || '').replace(/^v/i, '').split('.').map((x) => Number(x) || 0);
+}
+
+function newerVersion(remote, current) {
+  const a = versionParts(remote);
+  const b = versionParts(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true;
+    if ((a[i] || 0) < (b[i] || 0)) return false;
+  }
+  return false;
+}
+
+async function checkUpdate(cfg) {
+  const repo = String(cfg.updateRepo || FIXED.updateRepo).replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
+  const headers = { 'User-Agent': 'NOMO-QQBot/4.1', 'Accept': 'application/vnd.github+json' };
+  const out = {
+    current: FIXED.appVersion,
+    repo,
+    latestVersion: '',
+    latestSha: '',
+    latestMessage: '',
+    latestDate: '',
+    updateAvailable: false,
+    force: false,
+    note: '',
+  };
+  try {
+    const res = await fetch(`https://api.github.com/repos/${repo}/commits/main`, { headers, signal: AbortSignal.timeout(15000) });
+    if (res.ok) {
+      const c = await res.json();
+      out.latestSha = String(c?.sha || '').slice(0, 8);
+      out.latestMessage = String(c?.commit?.message || '').split('\n')[0].slice(0, 200);
+      out.latestDate = c?.commit?.author?.date || '';
+      out.force = /\[force-update\]|FORCE_UPDATE/i.test(out.latestMessage);
+    }
+  } catch (e) {
+    out.note = `读取 GitHub 提交失败:${e?.message || e}`;
+  }
+  try {
+    const res = await fetch(`https://raw.githubusercontent.com/${repo}/main/package.json`, {
+      headers: { 'User-Agent': 'NOMO-QQBot/4.1' }, signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const pkg = await res.json();
+      out.latestVersion = String(pkg?.version || '');
+      out.updateAvailable = newerVersion(out.latestVersion, out.current);
+    }
+  } catch {
+    /* 版本号读不到时只显示提交信息 */
+  }
+  return out;
 }

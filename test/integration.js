@@ -825,8 +825,18 @@ await t('扩展开关:关掉后工具从模型可见列表消失', async () => {
 });
 
 console.log('\n【存储】');
+await t('自定义首页 HTML 与后端接口', async () => {
+  let r = await api('/settings', { method: 'POST', body: { ui: { homepage: {
+    custom: true, html: '<h1>自定义首页</h1>', backend: 'return { ok: true, path: ctx.path, q: ctx.query.x || "" };',
+  } } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  const home = await call('/', { useCookie: false });
+  assert(home.status === 200 && home.text.includes('自定义首页'), `首页 ${home.status}`);
+  const apiRes = await call('/home-api/hello?x=1', { useCookie: false });
+  assert(apiRes.status === 200 && apiRes.json?.ok === true && apiRes.json?.path === 'hello' && apiRes.json?.q === '1', JSON.stringify(apiRes.json));
+});
 await t('V2 面板与公开首页配置', async () => {
-  let r = await api('/settings', { method: 'POST', body: { ui: { panelVersion: 'v2', accent: 'purple', homepage: { title: '测试站', description: '测试介绍' } } } });
+  let r = await api('/settings', { method: 'POST', body: { ui: { panelVersion: 'v2', accent: 'purple', homepage: { title: '测试站', description: '测试介绍', custom: false, html: '' } } } });
   assert(r.status === 200, JSON.stringify(r.json));
   const panel = await call('/administrator');
   assert(panel.status === 200, `面板 ${panel.status}`);

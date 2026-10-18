@@ -167,7 +167,7 @@ function json(obj, status = 200) {
 export const RESERVED = new Set([
   'qq', 'api', 'admin', 'administrator', 'health', 'check', 'favicon', 'robots',
   'index', 's', 'd', 'static', 'assets', '__data', 'cron', 'www', 'app', 'login',
-  'logout', 'null', 'undefined', 'test', 'panel', 'v1', 'media', 'confirm',
+  'logout', 'null', 'undefined', 'test', 'panel', 'v1', 'media', 'confirm', 'home-api',
 ]);
 
 // 站点后端接口:

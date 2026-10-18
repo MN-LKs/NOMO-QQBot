@@ -109,7 +109,7 @@ export function esc(s) {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-export function panelPage({ user = '', version = 'v1', accent = 'blue' } = {}) {
+export function panelPage({ user = '', version = 'v1', accent = 'blue', warnings = [], appVersion = '4.1.0', checkUpdates = true } = {}) {
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -305,11 +305,35 @@ body.v2 .ui-palette{display:flex;gap:8px;flex-wrap:wrap}
 body.v2 .ui-palette button{width:30px;height:30px;border-radius:50%;border:2px solid #fff;cursor:pointer;
  box-shadow:0 4px 12px rgba(15,23,42,.15)}
 body.v2 .ui-palette button.on{outline:2px solid var(--pri);outline-offset:2px}
+body.v2 .card,body.v2 .stat{transition:transform .22s ease,box-shadow .22s ease,background .22s ease}
+body.v2 .card:hover,body.v2 .stat:hover{transform:translateY(-2px);box-shadow:0 22px 50px rgba(15,23,42,.11)}
+body.v2 .btn{transition:transform .16s ease,box-shadow .16s ease,background .16s ease}
+body.v2 .btn:hover{transform:translateY(-1px)}
+body.v2 .btn:active{transform:translateY(0) scale(.98)}
+body.v2::before{content:'';position:fixed;inset:-20%;z-index:-1;pointer-events:none;
+ background:
+  radial-gradient(420px 420px at 18% 22%,rgba(99,102,241,.18),transparent 60%),
+  radial-gradient(380px 380px at 82% 12%,rgba(217,70,239,.14),transparent 60%),
+  radial-gradient(420px 420px at 68% 88%,rgba(14,165,233,.14),transparent 60%);
+ animation:v2float 18s ease-in-out infinite alternate}
+@keyframes v2float{0%{transform:translate3d(-1.5%,-1%,0) scale(1)}100%{transform:translate3d(1.5%,1.5%,0) scale(1.04)}}
+body.v2 .top h2{background:linear-gradient(90deg,#0f172a,#4f46e5 70%,#db2777);
+ -webkit-background-clip:text;background-clip:text;color:transparent}
+body.v2 .stat b{background:linear-gradient(135deg,var(--pri),#db2777);
+ -webkit-background-clip:text;background-clip:text;color:transparent}
 @media(max-width:760px){
  body.v2 .app{padding:10px}
  body.v2 aside{position:fixed;top:10px;bottom:10px;left:10px;height:auto;border-radius:22px}
  body.v2 .top{top:10px;margin:0 0 12px}
  body.v2 .wrap{padding:0 0 34px}
+ body.v2 .grid.g4{grid-template-columns:repeat(2,minmax(0,1fr))}
+ body.v2 .grid.g2{grid-template-columns:1fr}
+ body.v2 .card{padding:16px;border-radius:18px}
+ body.v2 .top h2{font-size:14px}
+}
+@media(max-width:420px){
+ body.v2 .grid.g4{grid-template-columns:1fr}
+ body.v2 .stat b{font-size:18px}
 }
 </style>
 </head>
@@ -337,7 +361,7 @@ body.v2 .ui-palette button.on{outline:2px solid var(--pri);outline-offset:2px}
 <div class="toast" id="toast"></div>
 <script>
 var API='/administrator/api';
-var ME={user:'${esc(user)}',version:'${version === 'v2' ? 'v2' : 'v1'}'};
+var ME={user:'${esc(user)}',version:'${version === 'v2' ? 'v2' : 'v1'}',appVersion:'${esc(appVersion)}',checkUpdates:${checkUpdates !== false},warnings:${JSON.stringify(Array.isArray(warnings) ? warnings : []).replace(/</g, '\\u003c')}};
 var S={route:'home',data:{},settings:null,overview:null};
 function el(id){return document.getElementById(id)}
 function h(s){return String(s===null||s===undefined?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
@@ -369,14 +393,25 @@ function confirmBox(title,text,onOk,danger){
  m.querySelector('[data-x]').onclick=function(){m.remove()};
  m.querySelector('[data-ok]').onclick=function(){m.remove();onOk()}}
 function sw(on,attr){return '<div class="sw'+(on?' on':'')+'" '+attr+'></div>'}
+function showUpdateInfo(r){
+ var lines=[];
+ lines.push('<div class="hint">当前版本 <b>'+h(r.current||ME.appVersion)+'</b> · 最新版本 <b>'+h(r.latestVersion||'未知')+'</b></div>');
+ if(r.latestSha)lines.push('<div class="small dim" style="margin-top:8px">最新提交 '+h(r.latestSha)+(r.latestDate?' · '+h(r.latestDate.slice(0,10)):'')+'</div>');
+ if(r.latestMessage)lines.push('<div class="small" style="margin-top:6px">'+h(r.latestMessage)+'</div>');
+ if(r.note)lines.push('<div class="small" style="color:#b45309;margin-top:6px">'+h(r.note)+'</div>');
+ lines.push('<div class="hint" style="margin-top:10px">'+(r.updateAvailable?'发现新版本。配置 Cloudflare Deploy Hook 后可以一键触发构建;没有配置就去 GitHub 手动推送。':'当前已是最新版本。')+'</div>');
+ var footer='<button class="btn" data-x>关闭</button>'+(r.updateAvailable?'<button class="btn pri" data-upd>立即更新</button>':'');
+ var m=modal('检查更新',lines.join(''),footer);
+ m.querySelector('[data-x]').onclick=function(){m.remove()};
+ if(r.updateAvailable)m.querySelector('[data-upd]').onclick=function(){var b=this;b.disabled=true;b.textContent='触发中…';
+  api('/update/deploy',{method:'POST'}).then(function(x){toast(x.note||'已触发部署');m.remove()})
+   .catch(function(e){toast(e.message);b.disabled=false;b.textContent='立即更新'})};
+}
 var NAV=[
  ['home','首页','M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-4v-6H9v6H5a1 1 0 0 1-1-1z'],
  ['homepage','首页配置','M4 5h16v14H4zM4 9h16'],
  ['agent','Agent 配置','M12 3a4 4 0 0 1 4 4c0 1.1-.5 2.1-1.2 2.8A6 6 0 0 1 18 15v3H6v-3a6 6 0 0 1 3.2-5.2A4 4 0 0 1 12 3zM9 21h6'],
- ['mcp','MCP 设置','M5 3h14v5H5zM5 16h14v5H5zM12 8v8','扩展管理'],
- ['skills','技能','M12 3l2.6 5.4 5.9.8-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9L3.5 9.2l5.9-.8z','扩展管理'],
- ['exts','扩展','M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z','扩展管理'],
- ['modules','模块','M9 6L4 12l5 6M15 6l5 6-5 6','扩展管理'],
+ ['ext','扩展管理','M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z'],
  ['projects','部署项目','M3 5h7l2 2h9v12H3zM3 11h18'],
  ['storage','存储','M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3'],
  ['settings','设置','M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 7.5 19l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.6 1.6 0 0 0 3 13.6H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.6 1.6 0 0 0 10 3V3a2 2 0 1 1 4 0v.1A1.6 1.6 0 0 0 16.5 4.5l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.6 1.6 0 0 0 21 10.1V10a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z'],
@@ -384,11 +419,12 @@ var NAV=[
 ];
 function renderNav(){
  var r=S.route.split('/')[0];
+ var active=['mcp','skills','exts','modules'].indexOf(r)>=0?'ext':r;
  var lastGroup='';
  el('nav').innerHTML=NAV.map(function(n){
   var head='';
   if(n[3]&&n[3]!==lastGroup){head='<div class="nav-group">'+h(n[3])+'</div>';lastGroup=n[3];}
-  return head+'<div class="nav'+(r===n[0]?' on':'')+'" data-go="'+n[0]+'">'+
+  return head+'<div class="nav'+(active===n[0]?' on':'')+'" data-go="'+n[0]+'">'+
    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="'+n[2]+'"/></svg>'+
    '<span>'+n[1]+'</span>'+(S.badges&&S.badges[n[0]]?'<i class="dot">'+S.badges[n[0]]+'</i>':'')+'</div>'}).join('');
  var col='#'+['2563eb','16a34a','d97706','dc2626','7c3aed','0891b2'][(ME.user.charCodeAt(0)||78)%6];
@@ -425,6 +461,7 @@ function render(force){
  if(r[0]==='home')return pageHome();
  if(r[0]==='homepage')return pageHomepageConfig();
  if(r[0]==='agent')return pageAgent();
+ if(r[0]==='ext')return pageExtHub();
  if(r[0]==='mcp')return pageMcp();
  if(r[0]==='skills')return pageSkills();
  if(r[0]==='exts')return pageExts();
@@ -486,15 +523,23 @@ function pageHomepageConfig(){
    '<div class="fld"><label class="f">介绍文字</label><textarea class="t" id="hp-desc" style="min-height:110px">'+h(hp.description||'')+'</textarea></div>'+
    '<div class="fld"><label class="f">GitHub 地址</label><input class="t mono" id="hp-github" value="'+h(hp.github||'https://github.com/MN-LKs/NOMO-QQBot')+'" placeholder="https://github.com/..."></div>'+
    '<div class="line"><div class="g"><b>显示 GitHub 按钮</b><span>首页主按钮和页脚都显示</span></div>'+sw(hp.showGithub!==false,'data-t="hpGithub"')+'</div>'+
+   '<div class="line"><div class="g"><b>使用自定义首页</b><span>开启后直接返回下面的 HTML,不再使用内置模板</span></div>'+sw(hp.custom===true,'data-t="hpCustom"')+'</div>'+
+   '<div class="fld"><label class="f">自定义 HTML</label><textarea class="t mono" id="hp-html" style="min-height:220px" placeholder="<!DOCTYPE html>...">'+h(hp.html||'')+'</textarea></div>'+
+   '<div class="fld"><label class="f">首页后端 JS(可选)</label><textarea class="t mono" id="hp-backend" style="min-height:160px" placeholder="return { ok: true, path: ctx.path };">'+h(hp.backend||'')+'</textarea>'+
+   '<div class="small dim" style="margin-top:4px">自定义首页里的脚本可以请求 <span class="mono">/home-api/任意路径</span>,由这段 JS 在沙盒里执行;支持 ctx.method / ctx.path / ctx.query / ctx.body / ctx.json() / ctx.fetch()。</div></div>'+
    '<div style="display:flex;gap:10px;margin-top:14px"><button class="btn pri" id="hp-save">保存</button><a class="btn" href="/" target="_blank" rel="noopener">打开首页</a></div>'+
-   '<div class="hint" style="margin-top:12px">首页是公开页面,不要在介绍里写密钥或内部地址。</div></div>';
+   '<div class="hint" style="margin-top:12px">首页是公开页面,不要在介绍里写密钥或内部地址。自定义 HTML 会原样返回,请自己保证安全。</div></div>';
   v.querySelector('[data-t="hpEnabled"]').onclick=function(){this.classList.toggle('on')};
   v.querySelector('[data-t="hpGithub"]').onclick=function(){this.classList.toggle('on')};
+  v.querySelector('[data-t="hpCustom"]').onclick=function(){this.classList.toggle('on')};
   v.querySelector('#hp-save').onclick=function(){
    var b=this;b.disabled=true;b.textContent='保存中…';
    api('/settings',{method:'POST',body:{ui:{homepage:{
     enabled:v.querySelector('[data-t="hpEnabled"]').classList.contains('on'),
     showGithub:v.querySelector('[data-t="hpGithub"]').classList.contains('on'),
+    custom:v.querySelector('[data-t="hpCustom"]').classList.contains('on'),
+    html:v.querySelector('#hp-html').value,
+    backend:v.querySelector('#hp-backend').value,
     title:v.querySelector('#hp-title').value.trim(),
     subtitle:v.querySelector('#hp-sub').value.trim(),
     description:v.querySelector('#hp-desc').value.trim(),
@@ -826,7 +871,7 @@ function pageSettings(){
  setTitle('设置');
  var v=el('view');v.innerHTML='<div class="empty">加载中…</div>';
  loadSettings(true).then(function(d){
-  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,ag=s.agent||{},ui=s.ui||{},dash=s.dashboard||{};
+  var s=d.settings,llm=s.llm,se=s.search,qq=s.qq,dep=s.deploy,lg=s.logs,gr=s.groups,ad=s.admin,ag=s.agent||{},ui=s.ui||{},dash=s.dashboard||{},upd=s.update||{};
   var headers=function(o){return h(JSON.stringify(o||{},null,0))};
   var mapObj=se.response||{},mapText=Object.keys(mapObj).some(function(k){return mapObj[k]})?JSON.stringify(mapObj):'';
   v.innerHTML=
@@ -901,7 +946,14 @@ function pageSettings(){
     ['blue','purple','green','pink','amber'].map(function(x){return '<option value="'+x+'"'+((ui.accent||'blue')===x?' selected':'')+'>'+x+'</option>'}).join('')+
    '</select></div></div>'+
    '<div class="hint" style="margin-top:12px">V2 的首页在「首页配置」里改;主题色只影响面板,V2 下生效。</div>'+
-   '<div style="margin-top:12px"><button class="btn pri" id="ui-save">保存并刷新</button></div></div>';
+   '<div style="margin-top:12px"><button class="btn pri" id="ui-save">保存并刷新</button></div></div>'+
+
+  '<div class="card"><h3>更新</h3><div class="sub">检查 GitHub 仓库的最新版本;配置 Cloudflare Deploy Hook 后可以一键触发重新构建。Worker 不能在运行时替换自己的代码,真正更新仍由 Cloudflare 构建完成。</div>'+
+   '<div class="line"><div class="g"><b>自动检查更新</b><span>登录面板后检查一次;关闭后不再自动检查</span></div>'+sw(upd.check!==false,'data-t="updateCheck"')+'</div>'+
+   '<div class="fld"><label class="f">GitHub 仓库</label><input class="t mono" id="upd-repo" value="'+h(upd.repo||'MN-LKs/NOMO-QQBot')+'" placeholder="owner/repo"></div>'+
+   '<div class="fld"><label class="f">Cloudflare Deploy Hook(可留空)</label><input class="t mono" id="upd-hook" value="'+h(upd.deployHook||'')+'" placeholder="https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/..."></div>'+
+   '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn pri" id="upd-check">检查更新</button><button class="btn" id="upd-save">保存</button></div>'+
+   '<div id="upd-result" class="hint" style="margin-top:12px">当前版本 '+h(ME.appVersion||'4.1.0')+'</div></div>';
   bindSettings(v);
  }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
 }
@@ -977,6 +1029,7 @@ function bindSettings(v){
  tog('[data-t="qqMarkdown"]',['qq','markdown']);
  tog('[data-t="allowData"]',['deploy','allowData']);
  tog('[data-t="deployConfirm"]',['deploy','confirm']);
+ tog('[data-t="updateCheck"]',['update','check']);
  tog('[data-t="debug"]',['logs','debug']);
  tog('[data-t="seEnabled"]',['search','enabled']);
  tog('[data-t="seMerge"]',['search','mergeReader']);
@@ -1022,6 +1075,14 @@ function bindSettings(v){
  v.querySelector('#ui-save').onclick=function(){var b=this;b.disabled=true;b.textContent='保存中…';
   api('/settings',{method:'POST',body:{ui:{panelVersion:v.querySelector('#ui-version').value,accent:v.querySelector('#ui-accent').value}}})
    .then(function(){location.reload()}).catch(function(e){toast(e.message);b.disabled=false;b.textContent='保存并刷新'})};
+ v.querySelector('#upd-save').onclick=function(){var b=this;b.disabled=true;b.textContent='保存中…';
+  api('/settings',{method:'POST',body:{update:{check:v.querySelector('[data-t="updateCheck"]').classList.contains('on'),
+   repo:v.querySelector('#upd-repo').value.trim(),deployHook:v.querySelector('#upd-hook').value.trim()}}})
+   .then(function(){toast('更新设置已保存');S.settings=null;b.disabled=false;b.textContent='保存'})
+   .catch(function(e){toast(e.message);b.disabled=false;b.textContent='保存'})};
+ v.querySelector('#upd-check').onclick=function(){var b=this;b.disabled=true;b.textContent='检查中…';
+  api('/update/check').then(function(r){showUpdateInfo(r)}).catch(function(e){toast(e.message)})
+   .then(function(){b.disabled=false;b.textContent='检查更新'})};
 }
 function testLLM(v){
  var url=v.querySelector('#llm-url').value.trim(),key=v.querySelector('#llm-key').value.trim();
@@ -1085,6 +1146,24 @@ function pageLogs(){
    api('/logs',{method:'DELETE'}).then(function(){toast('已清空');render()})},true)};
   v.querySelectorAll('[data-lv]').forEach(function(b){b.onclick=function(){S.logLevel=b.dataset.lv;render()}});
  }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+}
+function pageExtHub(){
+ setTitle('扩展管理');
+ var v=el('view');
+ var items=[
+  ['mcp','MCP 设置','接入 Streamable HTTP / SSE 服务器,查看工具并逐个开关'],
+  ['skills','技能','按触发词注入专项知识,支持粘贴 SKILL.md 自动解析'],
+  ['exts','扩展','内置工具组开关 + 外部 HTTP 扩展'],
+  ['modules','模块','预制后端 JS:Agent 工具 / 站点后端,可在线测试'],
+ ];
+ v.innerHTML='<div class="card"><h3>扩展管理</h3><div class="sub">MCP、技能、扩展、模块都收在这里;侧边栏只保留一个入口</div>'+
+  '<div class="grid g2">'+items.map(function(it){
+   return '<div style="border:1px solid var(--line);border-radius:14px;padding:16px;background:rgba(255,255,255,.45)">'+
+    '<b style="font-size:15px">'+h(it[1])+'</b><p class="small dim" style="margin:6px 0 12px;line-height:1.7">'+h(it[2])+'</p>'+
+    '<button class="btn sm pri" data-go="'+it[0]+'">打开'+h(it[1])+'</button></div>';
+  }).join('')+'</div>'+
+  '<div class="hint" style="margin-top:14px">这些页面仍然可以用地址直接访问,例如 #/mcp、#/skills、#/exts、#/modules。</div></div>';
+ v.querySelectorAll('[data-go]').forEach(function(b){b.onclick=function(){go(b.dataset.go)}});
 }
 function pageMcp(){
  setTitle('MCP 设置');
@@ -1486,7 +1565,9 @@ function pageStorage(){
     '<div><label class="f">Secret Key'+(editing?'(留空 = 不改)':'')+'</label><input class="t mono" type="password" id="sr-sk" value=""></div></div>'+
     '<div class="fld" style="margin-top:13px"><label style="font-size:13px"><input type="checkbox" id="sr-ps"'+(editing?(editing.pathStyle!==false?' checked':''):' checked')+'> Path-Style 寻址(大多数 S3 兼容服务需要;AWS 原生可以关)</label></div>'))+
    '<div class="fld"><label class="f">容量上限(GB)</label><input class="t" type="number" id="sr-max" value="'+(editing?Math.max(1,Math.round((editing.maxBytes||0)/1073741824)):5)+'"></div>'+
-   '<button class="btn pri" id="sr-save">'+(editing?'保存修改':'添加存储')+'</button> '+(editing?'<button class="btn" id="sr-cancel">取消编辑</button>':'')+'</div>';
+   '<button class="btn pri" id="sr-save">'+(editing?'保存修改':'添加存储')+'</button> '+(editing?'<button class="btn" id="sr-cancel">取消编辑</button>':'')+'</div>'+
+   '<div class="card" style="border-color:#fecaca"><h3 style="color:#b91c1c">危险操作</h3><div class="sub">重置会清空 D1 里的配置、项目、日志、统计、群组、技能、扩展、模块,清空 KV/R2 文件,并清空机器人的会话上下文。S3 物理文件需要到服务商后台删除。操作不可恢复。</div>'+
+   '<button class="btn bad" id="reset-all">重置全部数据</button></div>';
   var byId=function(id){return stores.filter(function(x){return x.id===id})[0]||{}};
   v.querySelectorAll('[data-en]').forEach(function(n){n.onclick=function(){
    var s=byId(n.dataset.en);
@@ -1530,13 +1611,35 @@ function pageStorage(){
     .then(function(){toast('已保存');storeEdit=null;render()})
     .catch(function(e){toast(e.message)}).then(function(){b.disabled=false})};
   if(editing)v.querySelector('#sr-cancel').onclick=function(){storeEdit=null;render()};
- }).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
+  v.querySelector('#reset-all').onclick=function(){
+   confirmBox('重置全部数据','这会删除 D1 配置/项目/日志、KV/R2 文件、机器人会话上下文,且不可恢复。确定继续?',function(){
+    var m=modal('确认管理员身份','<div class="hint" style="border-color:#fecaca;color:#b91c1c">最后一步:输入管理员用户名和密码。验证通过后会立即重置并短暂重载面板。</div>'+
+     '<div class="fld"><label class="f">管理员用户名</label><input class="t" id="rs-user" autocomplete="username"></div>'+
+     '<div class="fld"><label class="f">管理员密码</label><input class="t" type="password" id="rs-pass" autocomplete="current-password"></div>',
+     '<button class="btn" data-x>取消</button><button class="btn bad" data-ok>确认重置</button>');
+    m.querySelector('[data-x]').onclick=function(){m.remove()};
+    m.querySelector('[data-ok]').onclick=function(){var b=this;b.disabled=true;b.textContent='重置中…';
+     api('/reset',{method:'POST',body:{user:m.querySelector('#rs-user').value.trim(),pass:m.querySelector('#rs-pass').value}})
+      .then(function(r){m.remove();toast(r.note||'已重置,面板即将重载');setTimeout(function(){location.reload()},1800)})
+      .catch(function(e){toast(e.message);b.disabled=false;b.textContent='确认重置'})};
+   },true)};
+}).catch(function(e){v.innerHTML='<div class="card"><div class="empty">'+h(e.message)+'</div></div>'});
 }
 
 (function boot(){
  var r=(location.hash||'').replace(/^#\\/?/,'');
  S.route=r||'home';
  render();
+ if(ME.warnings&&ME.warnings.length)setTimeout(function(){
+  var m=modal('配置提醒','<div class="hint" style="border-color:#fecaca;color:#b91c1c;line-height:1.9">'+
+   ME.warnings.map(function(w){return '· '+h(w)}).join('<br>')+
+   '<br><br>可以先进入面板查看;依赖缺失配置的功能会返回明确提示。配置好后刷新本页即可。</div>',
+   '<button class="btn pri" data-x>知道了</button>');
+  m.querySelector('[data-x]').onclick=function(){m.remove()};
+ },400);
+ if(ME.checkUpdates)setTimeout(function(){
+  api('/update/check').then(function(r){if(r&&(r.updateAvailable||r.force))showUpdateInfo(r)}).catch(function(){});
+ },2500);
 })();
 </script>
 </body>
