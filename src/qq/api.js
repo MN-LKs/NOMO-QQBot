@@ -2,8 +2,6 @@ const UA = 'NOMO-QQBot/4.0';
 
 export const ERR_URL_FORBIDDEN = 40054010;
 export const ERR_TOO_LONG = 40054007;
-export const ERR_ACTIVE_NO_PERMISSION = 40034105;
-export const ERR_PASSIVE_EXPIRED = 40034128;
 
 export async function fetchAccessToken(cfg) {
   const res = await fetch(cfg.tokenUrl, {

@@ -62,9 +62,52 @@ export function chunkText(text, size = 800, maxChunks = 5) {
   return chunks.filter(Boolean).map((c) => c.slice(0, size + 40));
 }
 
+// 分片时 ``` 围栏很可能被切成两半,QQ 端会渲染失败(整段代码当纯文本,
+// 或者后面的正文被当成代码)。这里在边界处补齐:被切开的代码块,
+// 前一片补上收尾围栏,后一片补上开头围栏和语言标记。
+export function sealFenceChunks(chunks) {
+  if (!Array.isArray(chunks) || chunks.length < 2) return chunks;
+  let inFence = false;
+  let lang = '';
+  for (let i = 0; i < chunks.length; i++) {
+    if (!inFence) {
+      // 数一下这一片开了几个围栏:奇数个说明这一片结束时仍在代码块里
+      const lines = chunks[i].split('\n');
+      let opened = null;
+      for (const line of lines) {
+        const m = /^\s*```+\s*([A-Za-z0-9+#._-]*)\s*$/.exec(line);
+        if (m) {
+          if (opened === null) opened = { lang: m[1] };
+          else opened = null;
+        }
+      }
+      if (opened !== null) {
+        chunks[i] = chunks[i].replace(/\s+$/, '') + '\n```';
+        inFence = true;
+        lang = opened.lang;
+      }
+    } else {
+      chunks[i] = '```' + (lang || '') + '\n' + chunks[i];
+      // 这一片里可能有自己的收尾围栏,重新数一遍决定下一状态
+      const lines = chunks[i].split('\n');
+      let open = true;
+      for (const line of lines) {
+        if (/^\s*```+\s*[A-Za-z0-9+#._-]*\s*$/.test(line)) open = !open;
+      }
+      inFence = open;
+      if (!inFence) lang = '';
+    }
+  }
+  return chunks;
+}
+
 export function toPlainText(md) {
   let s = String(md ?? '');
-  s = s.replace(/```([a-zA-Z0-9+#-]*)\n?([\s\S]*?)```/g, (_m, _lang, code) => code.replace(/\n+$/, ''));
+  // 代码块:纯文本里没有等宽渲染,加一行分隔让代码段边界清楚可读
+  s = s.replace(/```([a-zA-Z0-9+#-]*)\n?([\s\S]*?)```/g, (_m, _lang, code) => {
+    const body = code.replace(/^\n+/, '').replace(/\n+$/, '');
+    return `\n——— 代码 ———\n${body}\n——— 代码结束 ———\n`;
+  });
   s = s.replace(/`([^`\n]+)`/g, '$1');
   s = s.replace(/^\s{0,3}#{1,6}\s+/gm, '');
   s = s.replace(/\*\*\*([^*]+)\*\*\*/g, '$1');

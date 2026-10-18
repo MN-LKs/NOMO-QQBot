@@ -12,8 +12,13 @@ export async function runAgent({ cfg, core, convId, userText, images = [], meta 
   const started = Date.now();
   // 总预算:0 表示不限制(大工程多轮工具调用需要多久就多久,只受轮次上限约束)
   const totalBudgetMs = Math.max(0, Number(cfg.agentBudgetMs) || 0);
-  // 单次非流式请求的超时:默认不限制;管理员打开"单次请求限时"开关后才生效
-  const perCallTimeoutMs = cfg.llmTimeLimitEnabled ? Math.max(5, Number(cfg.llmMaxSeconds) || 600) * 1000 : 0;
+  // 单次非流式请求的超时。
+  // 默认走 cfg.llmTimeoutMs(120 秒):没有上限的话,上游挂住就会把任务永久卡在
+  // running,用户只收到「🤖 Agent 正在运行」而永远等不到正文。
+  // 「单次请求限时」开关打开时,用管理员设的值覆盖(llmMaxSeconds 单位是秒)。
+  const perCallTimeoutMs = cfg.llmTimeLimitEnabled
+    ? Math.max(5, Number(cfg.llmMaxSeconds) || 600) * 1000
+    : Math.max(5000, Number(cfg.llmTimeoutMs) || 120000);
 
   let mcp = { defs: [], map: new Map() };
   try {

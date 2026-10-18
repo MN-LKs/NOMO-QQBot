@@ -331,17 +331,6 @@ export async function deletePrefix(env, prefix) {
   return total;
 }
 
-export async function listObjects(env, storeId, { prefix = 'f/', cursor, limit = 100 } = {}) {
-  const settings = await getRaw(env);
-  const stores = resolveStores(settings, env);
-  const s = storeId ? stores.find((x) => x.id === storeId) : stores.find((x) => x.enabled && availability(env, x).ok);
-  if (!s) return { error: '存储不存在或不可用' };
-  const av = availability(env, s);
-  if (!av.ok) return { error: av.reason };
-  const page = await getAdapter(env, s).list({ prefix, cursor, limit });
-  return { storeId: s.id, ...page };
-}
-
 /**
  * 服务商容量上限的启发式识别。
  * S3 协议本身不返回配额,所以只能按端点/类型给一个「服务商上限」参考值;

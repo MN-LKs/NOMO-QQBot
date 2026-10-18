@@ -104,9 +104,12 @@ a:hover{text-decoration:underline}
 }
 
 export function esc(s) {
-  return String(s === null || s === undefined ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 export function panelPage({ user = '', version = 'v1', accent = 'blue', warnings = [], appVersion = '4.1.0', checkUpdates = true } = {}) {
@@ -727,7 +730,7 @@ function pageAgent(){
   v.innerHTML=
   '<div class="card"><h3>大模型接口</h3><div class="sub">机器人思考与对话用的接口。支持任意兼容 /chat/completions 的服务</div>'+
    '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="ag-llm-url" value="'+h(llm.baseUrl)+'" placeholder="https://api.example.com/v1"></div>'+
-   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ag-llm-key" value="'+h(llm.apiKey)+'" placeholder="sk-..."></div>'+
+   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ag-llm-key" value="" placeholder="'+h(llm.apiKey?'已保存 '+llm.apiKey+' · 留空表示不修改':'sk-... 粘贴完整密钥')+'"></div>'+
    '<div class="row"><div><label class="f">模型 ID</label><input class="t mono" id="ag-llm-model" value="'+h(llm.model)+'"></div>'+
    '<div style="flex:0 0 140px"><label class="f">&nbsp;</label><button class="btn" id="ag-llm-list" style="width:100%">模型列表</button></div>'+
    '<div style="flex:0 0 140px"><label class="f">&nbsp;</label><button class="btn pri" id="ag-llm-test" style="width:100%">测试</button></div></div>'+
@@ -743,7 +746,7 @@ function pageAgent(){
 
   '<div class="card"><h3>联网搜索</h3><div class="sub">填一个到 /v1 为止的地址:搜索走 /search,读取正文走 /reader。支持秘塔、Exa、Tavily、Serper、Brave、Bing、Google 等</div>'+
    '<div class="fld"><label class="f">接口地址 Base URL</label><input class="t mono" id="ag-se-base" value="'+h(se.baseUrl||'')+'" placeholder="https://api.example.com/v1"></div>'+
-   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ag-se-key" value="'+h(se.key)+'"></div>'+
+   '<div class="fld"><label class="f">API Key</label><input class="t mono" id="ag-se-key" value="" placeholder="'+h(se.key?'已保存 '+se.key+' · 留空表示不修改':'粘贴完整密钥')+'"></div>'+
    '<div class="row"><div><label class="f">搜索路径</label><input class="t mono" id="ag-se-spath" value="'+h(se.searchPath||'/search')+'"></div>'+
    '<div><label class="f">读取路径</label><input class="t mono" id="ag-se-rpath" value="'+h(se.readerPath||'/reader')+'"></div></div>'+
    '<div class="row"><div><label class="f">每次返回条数(1-10)</label><input class="t" type="number" min="1" max="10" id="ag-se-results" value="'+(se.results||5)+'"></div>'+
@@ -879,7 +882,7 @@ function pageSettings(){
 
   '<div class="card"><h3>QQ 机器人</h3><div class="sub">连接方式可以随时切换</div>'+
    '<div class="row"><div><label class="f">APPID</label><input class="t mono" id="qq-id" value="'+h(qq.appId)+'"></div>'+
-   '<div><label class="f">APP Secret</label><input class="t mono" id="qq-secret" value="'+h(qq.appSecret)+'"></div></div>'+
+   '<div><label class="f">APP Secret</label><input class="t mono" id="qq-secret" value="" placeholder="'+h(qq.appSecret?'已保存 '+qq.appSecret+' · 留空表示不修改':'粘贴完整 Secret')+'"></div></div>'+
    '<div class="fld" style="margin-top:13px"><label class="f">运行环境</label><select class="t" id="qq-env">'+
     '<option value="prod"'+(qq.sandbox?'':' selected')+'>正式环境(机器人已上线)</option>'+
     '<option value="sandbox"'+(qq.sandbox?' selected':'')+'>沙箱环境(还在开发调试)</option></select></div>'+
@@ -950,6 +953,8 @@ function pageSettings(){
 
   '<div class="card"><h3>更新</h3><div class="sub">检查 GitHub 仓库的最新版本;配置 Cloudflare Deploy Hook 后可以一键触发重新构建。Worker 不能在运行时替换自己的代码,真正更新仍由 Cloudflare 构建完成。</div>'+
    '<div class="line"><div class="g"><b>自动检查更新</b><span>登录面板后检查一次;关闭后不再自动检查</span></div>'+sw(upd.check!==false,'data-t="updateCheck"')+'</div>'+
+   '<div class="line" style="border-color:#fecaca"><div class="g"><b>🚧 应急强制更新</b><span>开启后机器人停止服务,统一回一条升级提示(线上故障 / 必须尽快升级时用)</span></div>'+sw(upd.force===true,'data-t="forceUpdate"')+'</div>'+
+   '<div class="fld"><label class="f">升级提示文案(留空用默认)</label><input class="t mono" id="upd-force-note" value="'+h(upd.forceNote||'')+'" placeholder="机器人正在升级,请稍后再试。"></div>'+
    '<div class="fld"><label class="f">GitHub 仓库</label><input class="t mono" id="upd-repo" value="'+h(upd.repo||'MN-LKs/NOMO-QQBot')+'" placeholder="owner/repo"></div>'+
    '<div class="fld"><label class="f">Cloudflare Deploy Hook(可留空)</label><input class="t mono" id="upd-hook" value="'+h(upd.deployHook||'')+'" placeholder="https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/..."></div>'+
    '<div style="display:flex;gap:10px;margin-top:12px"><button class="btn pri" id="upd-check">检查更新</button><button class="btn" id="upd-save">保存</button></div>'+
@@ -977,39 +982,6 @@ function bindSettings(v){
    .catch(function(e){toast(e.message)})
    .then(function(){if(btn){btn.disabled=false;btn.textContent=t}});
  }
- if(v.querySelector('#llm-save'))v.querySelector('#llm-save').onclick=function(){var b=this;
-  var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){return}
-  save({llm:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),
-   model:v.querySelector('#llm-model').value.trim(),headers:hh,reasoningEffort:v.querySelector('#llm-effort').value,
-   deepThinking:v.querySelector('#llm-think').value==='1',
-   timeLimitEnabled:v.querySelector('#llm-limit').value==='1',
-   maxSeconds:Math.max(5,Number(v.querySelector('#llm-secs').value)||600)},
-   dashboard:{url:v.querySelector('#llm-dash').value.trim()}},b)};
- if(v.querySelector('#llm-list'))v.querySelector('#llm-list').onclick=function(){var b=this;b.disabled=true;b.textContent='获取中…';
-  var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){b.disabled=false;b.textContent='获取模型列表';return}
-  api('/models',{method:'POST',body:{baseUrl:v.querySelector('#llm-url').value.trim(),apiKey:v.querySelector('#llm-key').value.trim(),headers:hh}})
-  .then(function(r){
-   if(!r.models.length){toast('接口没有返回模型');return}
-   v.querySelector('#llm-models').innerHTML='<label class="f">接口返回的模型(点击选用)</label><div>'+
-    r.models.map(function(x){return '<span class="chip" data-m="'+h(x)+'" style="cursor:pointer">'+h(x)+'</span>'}).join('')+'</div>';
-   v.querySelectorAll('[data-m]').forEach(function(c){c.onclick=function(){v.querySelector('#llm-model').value=c.dataset.m;toast('已填入 '+c.dataset.m)}});
-  }).catch(function(e){toast(e.message)}).then(function(){b.disabled=false;b.textContent='获取模型列表'})};
- if(v.querySelector('#llm-test'))v.querySelector('#llm-test').onclick=function(){testLLM(v)};
- if(v.querySelector('#se-save'))v.querySelector('#se-save').onclick=function(){var b=this;var hh;try{hh=jparse(v.querySelector('#se-headers').value,{})}catch(e){return}
-  var mv=v.querySelector('#se-map').value.trim(),mm={results:'',title:'',url:'',snippet:'',content:''};
-  if(mv){try{mm=JSON.parse(mv)}catch(e){toast('返回结构映射不是合法 JSON');return}}
-  save({search:{baseUrl:v.querySelector('#se-base').value.trim(),key:v.querySelector('#se-key').value.trim(),
-    searchPath:v.querySelector('#se-spath').value.trim()||'/search',readerPath:v.querySelector('#se-rpath').value.trim()||'/reader',
-    results:Math.max(1,Math.min(10,Number(v.querySelector('#se-results').value)||5)),
-    readerFormat:v.querySelector('#se-format').value.trim(),headers:hh,response:mm}},b)};
- if(v.querySelector('#se-test'))v.querySelector('#se-test').onclick=function(){var b=this;b.disabled=true;b.textContent='测试中…';
-  api('/test-search',{method:'POST',body:{query:'今天有什么新闻'}}).then(function(r){
-   modal('搜索测试结果','<pre class="code">'+h(JSON.stringify(r,null,2))+'</pre>','<button class="btn" data-x>关闭</button>')
-    .querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()};
-  }).catch(function(e){modal('搜索测试失败','<div class="hint" style="border-color:#fecaca;color:#b91c1c">'+h(e.message)+'</div>','<button class="btn" data-x>关闭</button>')
-   .querySelector('[data-x]').onclick=function(){this.closest('.modal').remove()}})
-  .then(function(){b.disabled=false;b.textContent='测试搜索'})};
- if(v.querySelector('#persona-save'))v.querySelector('#persona-save').onclick=function(){save({persona:v.querySelector('#persona').value},this)};
  v.querySelector('#qq-mode').onchange=function(){v.querySelector('#qq-hook').style.display=this.value==='webhook'?'block':'none'};
  v.querySelector('#qq-copy').onclick=function(){var i=v.querySelector('#qq-cb');i.select();
   try{navigator.clipboard.writeText(i.value);toast('已复制')}catch(e){document.execCommand('copy');toast('已复制')}};
@@ -1077,44 +1049,14 @@ function bindSettings(v){
    .then(function(){location.reload()}).catch(function(e){toast(e.message);b.disabled=false;b.textContent='保存并刷新'})};
  v.querySelector('#upd-save').onclick=function(){var b=this;b.disabled=true;b.textContent='保存中…';
   api('/settings',{method:'POST',body:{update:{check:v.querySelector('[data-t="updateCheck"]').classList.contains('on'),
+   force:v.querySelector('[data-t="forceUpdate"]').classList.contains('on'),
+   forceNote:v.querySelector('#upd-force-note').value.trim(),
    repo:v.querySelector('#upd-repo').value.trim(),deployHook:v.querySelector('#upd-hook').value.trim()}}})
    .then(function(){toast('更新设置已保存');S.settings=null;b.disabled=false;b.textContent='保存'})
    .catch(function(e){toast(e.message);b.disabled=false;b.textContent='保存'})};
  v.querySelector('#upd-check').onclick=function(){var b=this;b.disabled=true;b.textContent='检查中…';
   api('/update/check').then(function(r){showUpdateInfo(r)}).catch(function(e){toast(e.message)})
    .then(function(){b.disabled=false;b.textContent='检查更新'})};
-}
-function testLLM(v){
- var url=v.querySelector('#llm-url').value.trim(),key=v.querySelector('#llm-key').value.trim();
- var hh;try{hh=jparse(v.querySelector('#llm-headers').value,{})}catch(e){return}
- var m=modal('测试模型','<div class="empty">正在获取模型列表…</div>','<button class="btn" data-x>关闭</button>');
- m.querySelector('[data-x]').onclick=function(){m.remove()};
- api('/models',{method:'POST',body:{baseUrl:url,apiKey:key,headers:hh}}).then(function(r){
-  var bd=m.querySelector('.bd');
-  bd.innerHTML='<div class="fld"><label class="f">选择要测试的模型</label><select class="t" id="tm">'+
-   r.models.map(function(x){return '<option value="'+h(x)+'">'+h(x)+'</option>'}).join('')+'</select></div>'+
-   '<div style="display:flex;gap:10px;margin-bottom:14px"><button class="btn pri" id="go">开始测试</button>'+
-   '<button class="btn" id="copy" style="display:none">复制结果</button></div><div id="out"></div>';
-  bd.querySelector('#go').onclick=function(){
-   var b=this;b.disabled=true;b.textContent='测试中…';bd.querySelector('#out').innerHTML='<div class="empty">正在请求…</div>';
-   api('/test-llm',{method:'POST',body:{baseUrl:url,apiKey:key,headers:hh,model:bd.querySelector('#tm').value}}).then(function(r){
-    var ok1=r.chat&&r.chat.ok,ok2=r.tool&&r.tool.ok;
-    bd.querySelector('#out').innerHTML=
-     '<div class="line"><div class="g"><b>基础对话</b><span>'+h(r.chat&&r.chat.detail||'')+'</span></div>'+
-      (ok1?'<span class="tag ok">通过</span>':'<span class="tag bad">失败</span>')+'</div>'+
-     '<div class="line"><div class="g"><b>工具调用</b><span>'+h(r.tool&&r.tool.detail||'')+'</span></div>'+
-      (ok2?'<span class="tag ok">通过</span>':'<span class="tag bad">失败</span>')+'</div>'+
-     (r.chat&&r.chat.reply?'<div style="margin-top:12px"><label class="f">模型回复</label><pre class="code">'+h(r.chat.reply)+'</pre></div>':'')+
-     (!ok1||!ok2?'<div style="margin-top:12px"><label class="f">详细报错</label><pre class="code">'+h(JSON.stringify(r,null,2))+'</pre></div>':'');
-    var c=bd.querySelector('#copy');c.style.display='inline-block';
-    c.onclick=function(){navigator.clipboard.writeText(JSON.stringify(r,null,2));toast('已复制')};
-   }).catch(function(e){bd.querySelector('#out').innerHTML='<div class="hint" style="border-color:#fecaca;color:#b91c1c">'+h(e.message)+'</div>'})
-   .then(function(){b.disabled=false;b.textContent='开始测试'})};
- }).catch(function(e){
-  m.querySelector('.bd').innerHTML='<div class="hint" style="border-color:#fecaca;color:#b91c1c">获取模型列表失败:'+h(e.message)+'</div>'+
-   '<div style="margin-top:12px"><button class="btn pri" id="still">仍然测试当前模型</button></div>';
-  m.querySelector('#still').onclick=function(){m.remove();testLLM(v)};
- });
 }
 function pageLogs(){
  setTitle('日志');

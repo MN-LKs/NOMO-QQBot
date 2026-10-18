@@ -5,6 +5,17 @@ export async function bump(env, k, n = 1) {
   await run(env.DB, 'INSERT INTO stats (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = v + excluded.v', k, n);
 }
 
+// 一次 batch 顶掉 N 次往返:一条消息处理完要记 replies/tokens/tools 三项,
+// 串行发就是三次 D1 往返。D1 的 batch 是同一事务,比三次单独请求快得多。
+export async function bumpMany(env, entries) {
+  const list = (entries || []).filter(([k, n]) => k && Number(n));
+  if (!list.length) return;
+  await ensureSchema(env.DB);
+  const stmts = list.map(([k, n]) => env.DB.prepare(
+    'INSERT INTO stats (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = v + excluded.v').bind(k, Number(n)));
+  await env.DB.batch(stmts);
+}
+
 export async function bumpDaily(env, field, n = 1, ts = Date.now()) {
   await ensureSchema(env.DB);
   const day = dayKey(ts);

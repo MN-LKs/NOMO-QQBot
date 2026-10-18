@@ -12,10 +12,6 @@ const TITLE_KEYS = ['title', 'name', 'heading', 'headline'];
 const SNIPPET_KEYS = ['snippet', 'description', 'summary', 'content', 'text', 'abstract', 'desc'];
 const CONTENT_KEYS = ['content', 'text', 'markdown', 'md', 'body', 'article', 'result', 'data', 'answer', 'summary'];
 
-export const SUPPORTED_PROVIDERS = [
-  'metaso', 'exa', 'tavily', 'serper', 'brave', 'bing', 'google', 'serpapi', 'generic',
-];
-
 export function detectProvider(rawUrl) {
   let host = '';
   try {

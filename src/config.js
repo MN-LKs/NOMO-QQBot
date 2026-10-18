@@ -28,8 +28,6 @@ export const FIXED = {
   updateRepo: 'MN-LKs/NOMO-QQBot',
 };
 
-export const ENV_VARS = ['ADMIN_USER', 'ADMIN_PASS'];
-
 // 面板等自有页面的 CSP:不加载外部资源,只允许自身与内联脚本/样式
 export const CSP_PANEL = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
@@ -117,7 +115,7 @@ export const DEFAULT_SETTINGS = {
     apiPerMinute: 60,
   },
   logs: { debug: false, retentionDays: 7, maxRows: 8000 },
-  update: { check: true, repo: 'MN-LKs/NOMO-QQBot', deployHook: '' },
+  update: { check: true, repo: 'MN-LKs/NOMO-QQBot', deployHook: '', force: false, forceNote: '' },
   motd: {
     enabled: true,
     textApi: 'https://motd.txssb.cn/api/status',
@@ -288,6 +286,9 @@ export function flatten(settings, env = {}) {
     publicBaseUrl: normalizeBaseUrl(settings.site?.publicBaseUrl, { httpsOnly: true }),
     llmTimeLimitEnabled: llm.timeLimitEnabled === true,
     llmMaxSeconds: Math.max(5, Number(llm.maxSeconds) || 600),
+    // 单次请求的默认上限:管理员没开限时开关时用它兜底,
+    // 否则上游挂住会把任务永久卡在 running(只回执、不出正文)。
+    llmTimeoutMs: Math.max(5000, Number(llm.timeoutMs) || FIXED.llmTimeoutMs),
     compressChars: Math.max(1000, Number(llm.compressChars) || FIXED.compressChars),
     answerDelivery: qq.answerDelivery === 'active' ? 'active' : 'auto',
     markdownEnabled: qq.markdown === true,
@@ -304,6 +305,9 @@ export function flatten(settings, env = {}) {
     updateCheck: settings.update?.check !== false,
     updateRepo: String(settings.update?.repo || FIXED.updateRepo).trim(),
     updateDeployHook: String(settings.update?.deployHook || '').trim(),
+    // 应急强制更新:打开后机器人不再接活,统一回一条升级提示(用于线上炸了/必须尽快升级时)
+    forceUpdate: settings.update?.force === true,
+    forceNote: String(settings.update?.forceNote || '').trim(),
     motdEnabled: settings.motd?.enabled !== false,
     motdTextApi: String(settings.motd?.textApi || '').trim(),
     motdImageApi: String(settings.motd?.imageApi || '').trim(),

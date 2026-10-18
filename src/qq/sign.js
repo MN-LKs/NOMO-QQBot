@@ -67,7 +67,3 @@ export async function verifyWebhook(secret, signatureHex, timestamp, rawBody) {
   const ok = await crypto.subtle.verify({ name: 'Ed25519' }, publicKey, sig, msg);
   return ok ? { ok: true } : { ok: false, reason: 'Ed25519 验签不通过' };
 }
-
-export function _clearKeyCache() {
-  keyCache.clear();
-}

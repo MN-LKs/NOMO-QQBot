@@ -116,10 +116,6 @@ export async function getFileAuto(env, siteId, path) {
   return bytes;
 }
 
-export async function delFile(env, siteId, path) {
-  await deleteObject(env, keyFor(siteId, path));
-}
-
 export async function delAll(env, siteId) {
   return await deletePrefix(env, `f/${siteId}/`);
 }

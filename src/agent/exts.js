@@ -17,10 +17,6 @@ export const BUILTIN_EXTS = [
   { id: 'motd', name: 'MOTD 查询', description: '查询 Minecraft Java / Bedrock 服务器状态与 MOTD', tools: ['motd'] },
 ];
 
-export function builtinIds() {
-  return BUILTIN_EXTS.map((b) => b.id);
-}
-
 // 读取扩展状态:内置的合并默认值,外置的直接列出
 export async function loadExts(env) {
   let rows = [];

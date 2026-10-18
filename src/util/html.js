@@ -31,3 +31,13 @@ export function htmlToText(html, maxChars = 6000) {
   if (s.length > maxChars) s = s.slice(0, maxChars) + '\n…(已截断)';
   return s;
 }
+
+// HTML 转义:面板、确认页、临时站点都要用,一处实现,别各处再抄一份。
+export function esc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}

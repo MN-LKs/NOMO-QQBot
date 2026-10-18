@@ -1,10 +1,10 @@
 import { loadCfg } from '../store/settings.js';
 import { SCHEMA } from './schema.js';
 import { logWrite } from '../store/logs.js';
-import { bump, bumpDaily, touchGroup } from '../store/stats.js';
+import { bump, bumpMany, bumpDaily, touchGroup } from '../store/stats.js';
 import * as P from '../store/projects.js';
 import { getFile, mimeFor } from '../store/kvfile.js';
-import { chunkText, stripMention, toPlainText, truncate } from '../util/text.js';
+import { chunkText, sealFenceChunks, stripMention, toPlainText, truncate } from '../util/text.js';
 import { enhanceFiles } from '../util/seo.js';
 import { fetchAccessToken, deliver, deliverMedia, muteGroupMember, unmuteGroupMember, explainError, sendGroupMarkdown, sendC2CMarkdown } from '../qq/api.js';
 import { runAgent } from '../agent/loop.js';
@@ -14,10 +14,13 @@ import { parseMotdTarget, queryMotd, formatMotdText, fetchMotdImage } from '../a
 import { imageToDataUrl, attachmentKind, describeAttachments } from '../qq/media.js';
 import { wsStart, wsClose, wsEnsure, wsStatus } from '../qq/gateway.js';
 import { isReservedPath, genSiteId } from '../util/id.js';
+import { isMasked } from '../util/secret.js';
 
 const JOB_MAX_PER_ALARM = 25;
 const ALARM_DEADLINE_MS = 12 * 60 * 1000;
 const EVENT_TTL_MS = 10 * 60 * 1000;
+// running 超过这个时间还没跑完,就认为 DO 被驱逐了,把任务放回队列重跑
+const JOB_STALE_MS = 10 * 60 * 1000;
 const SANDBOX_MAX_FILE = 200000;
 const SANDBOX_MAX_TOTAL = 2 * 1024 * 1024;
 
@@ -28,6 +31,8 @@ export class BotCore {
     this.sql = ctx.storage.sql;
     this._cfg = null;
     this._cfgAt = 0;
+    this._token = null;
+    this._tokenExp = 0;
     for (const stmt of SCHEMA) this.sql.exec(stmt);
   }
 
@@ -112,6 +117,12 @@ export class BotCore {
   async tick() {
     const cfg = await this.cfg(true);
     let note = '';
+    // 先把上次被驱逐后卡在 running 的任务放回队列,再领新任务
+    const reclaimed = this.reclaimStaleJobs();
+    if (reclaimed) {
+      await logWrite(this.env, 'warn', 'do', `发现 ${reclaimed} 条任务卡在执行中(实例被回收),已放回队列重跑`);
+      note = `已恢复 ${reclaimed} 条中断任务`;
+    }
     if (cfg.mode === 'websocket') {
       const r = await wsEnsure(this);
       note = r?.note || '';
@@ -169,11 +180,17 @@ export class BotCore {
     }
     this._cfg = null;
     this._cfgAt = 0;
+    this._token = null;
+    this._tokenExp = 0;
     return { ok: true };
   }
 
   async apply() {
     const cfg = await this.cfg(true);
+    // QQ 凭据可能刚被改过:丢掉旧的 access token 和配置缓存,下次发消息重新取
+    this._token = null;
+    this._tokenExp = 0;
+    this.sql.exec("DELETE FROM kv WHERE k = 'qq_token'");
     if (cfg.mode === 'websocket') {
       const r = await wsStart(this, { force: true });
       return { ok: r.ok, note: r.ok ? '已切换到 WebSocket 模式并连接' : `WebSocket 连接失败:${r.note}`, ws: wsStatus(this) };
@@ -209,6 +226,20 @@ export class BotCore {
       payload = {};
     }
     return { id: row.id, kind: row.kind, payload };
+  }
+
+  // 上一次跑这条任务时 DO 被驱逐/休眠了(Cloudflare 会在闲置时回收隔离实例),
+  // 状态还停在 running,没人再来领。这里按 started_at 判定超时,把僵死任务放回队列。
+  // 阈值要明显大于单次请求上限(默认 120s),否则会重复回复同一条消息。
+  reclaimStaleJobs(maxAgeMs = JOB_STALE_MS) {
+    const cutoff = Date.now() - Math.max(30000, Number(maxAgeMs) || JOB_STALE_MS);
+    const stale = this.sql
+      .exec('SELECT id FROM jobs WHERE status = ? AND started_at IS NOT NULL AND started_at < ?', 'running', cutoff)
+      .toArray();
+    for (const r of stale) {
+      this.sql.exec("UPDATE jobs SET status = 'pending', started_at = NULL WHERE id = ?", r.id);
+    }
+    return stale.length;
   }
 
   finishJob(id, error) {
@@ -376,6 +407,15 @@ Object.assign(BotCore.prototype, {
       return;
     }
 
+    // 应急强制更新:管理员一键开启后,机器人停止服务,统一回升级提示。
+    // 放在最前面,连 AI 配置检查都要让路 —— 这时候配置对不对都不重要了。
+    if (cfg.forceUpdate) {
+      const note = cfg.forceNote || '机器人正在升级,请稍后再试。';
+      await logWrite(this.env, 'warn', 'agent', `强制更新已开启,拒绝服务:` + note).catch(() => null);
+      await this.reply(p, `🚧 ${note}`);
+      return;
+    }
+
     // AI 接口没配好时,直接给一句人话,别让用户等到一个 fetch 报错
     if (!cfg.llmBaseUrl || !cfg.llmApiKey) {
       const lack = [!cfg.llmBaseUrl ? '接口地址' : '', !cfg.llmApiKey ? 'API Key' : '']
@@ -383,6 +423,17 @@ Object.assign(BotCore.prototype, {
       await logWrite(this.env, 'warn', 'agent', `AI 接口未配置(${lack}),已拒绝请求`).catch(() => null);
       await this.reply(p, `⚙️ 管理员还没有配置 AI 接口(缺 ${lack})。\n`
         + '请到管理面板「设置 → AI 接口」填写地址、Key 和模型,保存后再来找我。');
+      return;
+    }
+
+    // 存进去的是面板上的打码值(如 sk-z********6pAm)时,上游一定 401。
+    // 与其让它跑一轮再报错,不如现在就点明「重新填一次真 Key」。
+    if (isMasked(cfg.llmApiKey)) {
+      await logWrite(this.env, 'error', 'agent',
+        'AI 接口的 API Key 是面板打码值(sk-****),不是真密钥;请在面板重新粘贴完整 Key').catch(() => null);
+      await this.reply(p, '⚙️ AI 接口的 API Key 是面板显示的**打码值**(长这样:sk-z********6pAm),不是真正的密钥,'
+        + '所以一直连不上上游。\n请管理员打开管理面板 →「Agent 配置 → 大模型接口」,'
+        + '把完整密钥重新粘贴进 API Key 输入框并保存(留空则不会修改),然后就能用了。');
       return;
     }
 
@@ -460,9 +511,11 @@ Object.assign(BotCore.prototype, {
       log(`[上下文] 自动压缩失败 ${e?.message || e}`, 'warn');
     }
 
-    await bump(this.env, 'replies', 1).catch(() => null);
-    await bump(this.env, 'tokens', result.usageTotal || 0).catch(() => null);
-    await bump(this.env, 'tools', result.toolTrace.length || 0).catch(() => null);
+    await bumpMany(this.env, [
+      ['replies', 1],
+      ['tokens', result.usageTotal || 0],
+      ['tools', result.toolTrace.length || 0],
+    ]).catch(() => null);
     log(`[完成] 轮次=${result.rounds} 工具=${result.toolTrace.length} token=${result.usageTotal} 耗时=${Date.now() - started}ms 降级=${result.downgraded}`);
   },
 
@@ -485,15 +538,21 @@ Object.assign(BotCore.prototype, {
 
   async getToken(force = false) {
     const now = Date.now();
-    if (!force) {
-      const rows = this.sql.exec("SELECT v, exp FROM kv WHERE k = 'qq_token'").toArray();
-      if (rows.length && Number(rows[0].exp) > now + 60000) return rows[0].v;
+    // 先看内存:一条消息要发回执+正文,每次都查 SQLite 是白费
+    if (!force && this._token && this._tokenExp > now + 30000) return this._token;
+    const rows = this.sql.exec("SELECT v, exp FROM kv WHERE k = 'qq_token'").toArray();
+    if (!force && rows.length && Number(rows[0].exp) > now + 30000) {
+      this._token = rows[0].v;
+      this._tokenExp = Number(rows[0].exp);
+      return this._token;
     }
     const cfg = await this.cfg();
     const r = await fetchAccessToken(cfg);
     this.sql.exec('INSERT INTO kv (k, v, exp) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v, exp = excluded.exp',
       'qq_token', r.token, r.expiresAt);
-    return r.token;
+    this._token = r.token;
+    this._tokenExp = Number(r.expiresAt) || now + 7000000;
+    return this._token;
   },
 
   async reply(p, text, opts = {}) {
@@ -511,7 +570,7 @@ Object.assign(BotCore.prototype, {
     const token = await this.getToken();
     // 条数上限:QQ 同一条消息最多回复 4~5 次(单聊 4 / 群聊 5),回执已经用掉 1 次,这里留够余量
     const maxChunks = p.scene === 'c2c' ? 3 : 4;
-    const chunks = chunkText(text, cfg.chunkChars || 1500, maxChunks);
+    const chunks = sealFenceChunks(chunkText(text, cfg.chunkChars || 1500, maxChunks));
     if (!chunks.length) return { sent: [], errors: [], mode };
     const target = p.scene === 'c2c' ? { kind: 'c2c', id: p.targetId } : { kind: 'group', id: p.targetId };
     const r = await deliver(cfg, token, target, {

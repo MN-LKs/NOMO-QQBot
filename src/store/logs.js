@@ -1,7 +1,5 @@
 import { ensureSchema, dayKey } from './db.js';
 
-export const LEVELS = ['debug', 'info', 'warn', 'error'];
-
 export async function write(env, level, tag, msg) {
   const line = typeof msg === 'string' ? msg : JSON.stringify(msg);
   if (level === 'error') console.error(`[${tag}] ${line}`);
@@ -18,10 +16,6 @@ export async function write(env, level, tag, msg) {
 }
 
 export const logWrite = write;
-
-export function makeLogger(env, tag) {
-  return (msg, level = 'info') => write(env, level, tag, msg);
-}
 
 export async function list(env, { level = '', limit = 200, before = 0 } = {}) {
   await ensureSchema(env.DB);

@@ -3,6 +3,7 @@ import worker from '../src/index.js';
 import { makeEnv, makeCtx, startAlarmRunner } from './harness.js';
 import { keysFromSecret } from '../src/qq/sign.js';
 import { bytesToHex, concatBytes, utf8 } from '../src/util/bytes.js';
+import { chunkText, sealFenceChunks } from '../src/util/text.js';
 
 let pass = 0;
 const fails = [];
@@ -65,6 +66,16 @@ async function startUpstream() {
           ['TEST_TOOL_GROUPRECENT', 'group_recent', {}],
           ['TEST_TOOL_MODULE', 'echo_mod', { x: 21 }],
         ].find(([mark]) => userText.includes(mark));
+        if (userText.includes('TEST_SLOW_UPSTREAM')) {
+          // 模拟上游挂住:延迟到远超测试用的 5 秒超时阈值
+          setTimeout(() => {
+            try {
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '太慢了' }, finish_reason: 'stop' }] }));
+            } catch { /* 客户端已放弃 */ }
+          }, 15000);
+          return;
+        }
         if (magic && !hasToolResult) {
           const [, name, args] = magic;
           return send({
@@ -313,6 +324,32 @@ await t('接口地址自动整理:补 https、剥掉 /chat/completions', async (
   const cur = await api('/settings');
   assert(cur.json.settings.llm.baseUrl === 'https://api.example.com/v1', cur.json.settings.llm.baseUrl);
   await api('/settings', { method: 'POST', body: { llm: { baseUrl: `http://127.0.0.1:${up.port}/v1` } } });
+});
+
+console.log('\n【Markdown 代码块分片】');
+await t('代码块被分片时会补齐围栏,不会渲染失败', async () => {
+  const long = '```js\n' + Array.from({ length: 60 }, (_, i) => `console.log(${i});`).join('\n') + '\n```';
+  const chunks = sealFenceChunks(chunkText(long, 800, 4));
+  assert(chunks.length >= 2, '应该被分成多片');
+  for (const [i, c] of chunks.entries()) {
+    const fences = (c.match(/```/g) || []).length;
+    assert(fences % 2 === 0, `第 ${i} 片围栏不成对:${fences}`);
+  }
+});
+
+await t('普通文本分片不受影响', async () => {
+  const plain = chunkText('你好'.repeat(500), 800, 4);
+  const sealed = sealFenceChunks([...plain]);
+  assert(JSON.stringify(sealed) === JSON.stringify(plain), '普通文本不该被改动');
+});
+
+await t('多段代码块跨片也能各自闭合', async () => {
+  const blocks = Array.from({ length: 4 }, (_, b) => `\`\`\`py\n${Array.from({ length: 25 }, (_, i) => `x${b}_${i} = ${i}`).join('\n')}\n\`\`\`\n`).join('\n');
+  const chunks = sealFenceChunks(chunkText(blocks, 800, 5));
+  for (const [i, c] of chunks.entries()) {
+    const fences = (c.match(/```/g) || []).length;
+    assert(fences % 2 === 0, `第 ${i} 片围栏不成对:${fences}`);
+  }
 });
 
 console.log('\n【部署项目】');
@@ -1081,6 +1118,78 @@ await t('站点接口:每分钟频率限制', async () => {
   assert(last === 429, `第 11 次应为 429,实际 ${last}`);
 });
 
+console.log('\n【中断任务恢复】');
+await t('卡在执行中的任务会被放回队列,不会只回执不回复', async () => {
+  const core = env.BOT_CORE.core('core');
+  assert(core, '应能拿到 DO 实例');
+  // 模拟:DO 跑到一半被 Cloudflare 回收,任务停在 running,没人再来领
+  core.sql.exec('INSERT INTO jobs (id, kind, payload, status, created_at, started_at) VALUES (?,?,?,?,?,?)',
+    'j_stuck', 'message', JSON.stringify({ kind: 'message' }), 'running',
+    Date.now() - 700000, Date.now() - 690000);
+  const n = core.reclaimStaleJobs();
+  assert(n === 1, '应回收 1 条僵死任务,实际 ' + n);
+  const job = core.claimNextJob();
+  assert(job && job.id === 'j_stuck', '回收后应能重新领到这条任务');
+  core.finishJob('j_stuck', null);
+});
+
+await t('正常执行中的任务不会被误回收', async () => {
+  const core = env.BOT_CORE.core('core');
+  core.sql.exec('INSERT INTO jobs (id, kind, payload, status, created_at, started_at) VALUES (?,?,?,?,?,?)',
+    'j_running', 'message', '{}', 'running', Date.now() - 60000, Date.now() - 50000);
+  assert(core.reclaimStaleJobs() === 0, '刚开始跑的任务不该被回收');
+  core.finishJob('j_running', null);
+});
+
+console.log('\n【上游超时与应急开关】');
+await t('上游挂住不会把任务永久卡住', async () => {
+  // 上游故意不响应,验证单次请求最终会超时并给出兜底回复
+  const stub = env.BOT_CORE.get(env.BOT_CORE.idFromName('core'));
+  // 打开限时开关,把阈值压到 5 秒,测试才跑得动
+  await api('/settings', { method: 'POST', body: { llm: { timeLimitEnabled: true, maxSeconds: 5 } } });
+  resetDoCfg();
+  const before = calls.messages.length;
+  const t0 = Date.now();
+  await stub.fetch('https://do/enqueue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      eventId: `EV_SLOW_${Date.now()}`, kind: 'message', scene: 'group', mentioned: true,
+      convId: 'g:GROUP_TEST_1', targetId: 'GROUP_TEST_1', messageId: 'MSG_SLOW_1',
+      userId: 'USER_TEST_1', nickname: '小明', text: 'AI TEST_SLOW_UPSTREAM 慢慢跑', ts: Date.now(),
+    }),
+  });
+  // 限时 5 秒,上游要 15 秒才回;给足余量等它收尾
+  let done = false;
+  for (let i = 0; i < 120 && !done; i++) {
+    await sleep(100);
+    done = calls.messages.slice(before).length >= 2;
+  }
+  const elapsed = Date.now() - t0;
+  await api('/settings', { method: 'POST', body: { llm: { timeLimitEnabled: false, maxSeconds: 600 } } });
+  resetDoCfg();
+  assert(done, `必须在超时后给出回复,实际收到:${JSON.stringify(calls.messages.slice(before).map((m) => m.body.content))}`);
+  assert(elapsed < 12000, `不该死等上游 15 秒,实际 ${elapsed}ms`);
+  // 任务必须跑完,不能卡在 running 里
+  const core = env.BOT_CORE.core('core');
+  assert(core.countJobs('running') === 0, '任务不该卡在执行中');
+});
+
+await t('应急强制更新开启后,机器人统一回升级提示', async () => {
+  await api('/settings', { method: 'POST', body: { update: { force: true, forceNote: '正在紧急升级,稍等几分钟。' } } });
+  resetDoCfg();
+  const before = calls.messages.length;
+  await sendGroupAt('AI 在吗');
+  for (let i = 0; i < 200 && calls.messages.length < before + 1; i++) await sleep(50);
+  assert(calls.messages.length >= before + 1, '应回一条升级提示');
+  const content = String(calls.messages[before]?.body?.content || '');
+  assert(content.includes('正在紧急升级'), `实际:${content}`);
+  const llmBefore = calls.llm.length;
+  await api('/settings', { method: 'POST', body: { update: { force: false, forceNote: '' } } });
+  resetDoCfg();
+  assert(calls.llm.length === llmBefore, '强制更新期间不该调用模型');
+});
+
 console.log('\n【MCP】');
 let mcpId = '';
 await t('添加 MCP 服务器并自动连接', async () => {
@@ -1234,7 +1343,7 @@ await t('保存限时开关与投递方式(可往返)', async () => {
 
 console.log('\n【AI 接口未配置】');
 await t('AI 接口没填时给出人话提示,而不是上游报错', async () => {
-  await api('/settings', { method: 'POST', body: { llm: { apiKey: '' } } });
+  await api('/settings', { method: 'POST', body: { llm: { apiKey: '__CLEAR__' } } });
   resetDoCfg();
   const before = calls.messages.length;
   await sendGroupAt('测试未配置');
@@ -1243,9 +1352,41 @@ await t('AI 接口没填时给出人话提示,而不是上游报错', async () =
   const last = calls.messages[calls.messages.length - 1];
   const content = String(last.body.content || '');
   assert(content.includes('还没有配置 AI 接口'), content.slice(0, 200));
-  assert(content.includes('AI 接口'), content.slice(0, 200));
+  assert(content.includes('API Key'), content);
   await api('/settings', { method: 'POST', body: { llm: { apiKey: 'sk-test-1234567890' } } });
   resetDoCfg();
+});
+
+console.log('\n【密钥掩码不回写】');
+await t('面板拿掩码保存不会把 sk-**** 写进数据库', async () => {
+  await api('/settings', { method: 'POST', body: { llm: { apiKey: 'sk-testkey-aaaa' } } });
+  const stored = await api('/settings');
+  const masked = stored.json.settings.llm.apiKey;
+  assert(masked.includes('****'), '回读必须打码:' + masked);
+  assert(!masked.includes('real-secret'), '打码不能泄漏中段:' + masked);
+  const r = await api('/settings', { method: 'POST', body: { llm: { apiKey: masked } } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(r.json.settings.llm.apiKey === masked, '回显应继续打码');
+  const after = await api('/settings');
+  assert(after.json.settings.llm.apiKey === masked, '掩码不应改变已存值');
+});
+
+await t('密钥输入框留空表示不修改', async () => {
+  await api('/settings', { method: 'POST', body: { llm: { apiKey: 'sk-testkey-bbbb' } } });
+  const before = (await api('/settings')).json.settings.llm.apiKey;
+  const r = await api('/settings', { method: 'POST', body: { llm: { apiKey: '' } } });
+  const after = r.json.settings.llm.apiKey;
+  assert(after === before, `留空应保持原值,实际 ${after} != ${before}`);
+  const cur = await api('/settings');
+  assert(cur.json.settings.llm.apiKey === before, '数据库里的值不该被空串清掉');
+});
+
+await t('模型列表不会拿掩码去请求上游', async () => {
+  await api('/settings', { method: 'POST', body: { llm: { apiKey: 'sk-testkey-cccc', baseUrl: `http://127.0.0.1:${up.port}/v1` } } });
+  const masked = (await api('/settings')).json.settings.llm.apiKey;
+  const r = await api('/models', { method: 'POST', body: { baseUrl: `http://127.0.0.1:${up.port}/v1`, apiKey: masked } });
+  assert(r.status === 200, JSON.stringify(r.json));
+  assert(Array.isArray(r.json.models) && r.json.models.length, '应回退到已存真 Key 并拿到模型列表');
 });
 
 alarm.stop();

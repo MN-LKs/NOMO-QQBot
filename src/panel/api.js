@@ -1,5 +1,6 @@
 import { FIXED, missingEnv, normalizeApiBase, normalizeBaseUrl } from '../config.js';
 import { getRaw, savePatch, maskSecrets, loadCfg, invalidate } from '../store/settings.js';
+import { resolveSecret, isMasked, looksLikeUsableKey } from '../util/secret.js';
 import { list as logList, clear as logClear, cleanup as logCleanup, count as logCount, write as logWrite } from '../store/logs.js';
 import { overview } from '../store/stats.js';
 import * as P from '../store/projects.js';
@@ -30,11 +31,9 @@ function num(v, d) {
   return Number.isFinite(n) ? n : d;
 }
 
+// 密钥统一走 util/secret.js 的规则:掩码/空 = 不修改,CLEAR_SENTINEL = 清空。
 function keepSecret(incoming, current) {
-  if (incoming === undefined || incoming === null) return current;
-  const s = String(incoming);
-  if (s.includes('****')) return current;
-  return s.trim();
+  return resolveSecret(incoming, current);
 }
 
 function cleanHeaders(h) {
@@ -164,9 +163,14 @@ export async function handlePanelApi(request, env, url, ctx) {
 
     if (path === '/models' && method === 'POST') {
       const baseUrl = normalizeApiBase(body?.baseUrl);
-      const apiKey = String(body?.apiKey || '');
+      const cur = await getRaw(env);
+      // 面板输入框里放的是打码值,不能拿去请求上游;掩码/空一律回退到已存的真 Key。
+      const apiKey = resolveSecret(body?.apiKey, cur.llm.apiKey);
       const headers = cleanHeaders(body?.headers);
       if (!baseUrl) return jsonRes({ error: '请先填写接口地址' }, 400);
+      if (!looksLikeUsableKey(apiKey)) {
+        return jsonRes({ error: '还没有保存可用的 API Key。请在「API Key」里填入完整密钥(不要填面板显示的 sk-**** 打码值),保存后再点「模型列表」。' }, 400);
+      }
       const res = await fetch(`${baseUrl}/models`, {
         headers: { ...headers, ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}), 'User-Agent': 'NOMO-QQBot/4.0' },
       });
@@ -187,9 +191,13 @@ export async function handlePanelApi(request, env, url, ctx) {
 
     if (path === '/test-llm' && method === 'POST') {
       const baseUrl = normalizeApiBase(body?.baseUrl);
-      const apiKey = String(body?.apiKey || '');
+      const cur = await getRaw(env);
+      const apiKey = resolveSecret(body?.apiKey, cur.llm.apiKey);
       const headers = cleanHeaders(body?.headers);
-      const model = String(body?.model || '');
+      const model = String(body?.model || '').trim() || cur.llm.model;
+      if (!looksLikeUsableKey(apiKey)) {
+        return jsonRes({ error: '还没有保存可用的 API Key。请填入完整密钥(不要填面板显示的 sk-**** 打码值),保存后再测试。' }, 400);
+      }
       const cfg = {
         ...FIXED,
         llmBaseUrl: baseUrl,
@@ -648,9 +656,9 @@ async function storageApi(env, seg, method, body, url) {
       next.bucket = String(src.bucket ?? cur.bucket ?? '').trim();
       next.region = String(src.region ?? cur.region ?? 'auto').trim() || 'auto';
       const ak = String(src.accessKey ?? '').trim();
-      next.accessKey = ak && !ak.includes('****') ? ak : String(cur.accessKey || '');
+      next.accessKey = resolveSecret(ak, cur.accessKey);
       const sk = String(src.secretKey ?? '').trim();
-      next.secretKey = sk && !sk.includes('****') ? sk : String(cur.secretKey || '');
+      next.secretKey = resolveSecret(sk, cur.secretKey);
       next.pathStyle = src.pathStyle !== false;
       if (!next.endpoint || !next.bucket || !next.accessKey || !next.secretKey) {
         return jsonRes({ error: 'S3 需要填全:endpoint / bucket / AccessKey / SecretKey' }, 400);

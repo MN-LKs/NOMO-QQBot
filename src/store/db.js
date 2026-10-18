@@ -1,4 +1,4 @@
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 6;
 
 export const DDL = [
   `CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)`,
@@ -10,12 +10,17 @@ export const DDL = [
   `CREATE TABLE IF NOT EXISTS groups (
      openid TEXT PRIMARY KEY, name TEXT, enabled INTEGER NOT NULL DEFAULT 1,
      msg_count INTEGER NOT NULL DEFAULT 0, first_seen INTEGER, last_seen INTEGER)`,
+  // 后台概览按 last_seen 倒序列群,没这条索引就是全表扫
+  `CREATE INDEX IF NOT EXISTS idx_groups_last_seen ON groups(last_seen DESC)`,
   `CREATE TABLE IF NOT EXISTS projects (
      id TEXT PRIMARY KEY, name TEXT, description TEXT, owner TEXT, source TEXT,
      created_at INTEGER, updated_at INTEGER, expires_at INTEGER,
      bytes INTEGER NOT NULL DEFAULT 0, hits INTEGER NOT NULL DEFAULT 0,
      data_bytes INTEGER NOT NULL DEFAULT 0, file_count INTEGER NOT NULL DEFAULT 0)`,
   `CREATE INDEX IF NOT EXISTS idx_projects_expires ON projects(expires_at)`,
+  // 项目列表默认 ORDER BY created_at DESC;按名字查重也常用
+  `CREATE INDEX IF NOT EXISTS idx_projects_created ON projects(created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name)`,
   `CREATE TABLE IF NOT EXISTS files (
      site_id TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0,
      raw_size INTEGER NOT NULL DEFAULT 0, ct TEXT, gz INTEGER NOT NULL DEFAULT 0,
@@ -23,6 +28,8 @@ export const DDL = [
   `CREATE TABLE IF NOT EXISTS sdata (
      site_id TEXT NOT NULL, k TEXT NOT NULL, v TEXT NOT NULL, updated_at INTEGER NOT NULL,
      PRIMARY KEY (site_id, k))`,
+  // 站点后端按 updated_at 列出 key 时会用到
+  `CREATE INDEX IF NOT EXISTS idx_sdata_updated ON sdata(site_id, updated_at DESC)`,
   `CREATE TABLE IF NOT EXISTS admins (
      openid TEXT PRIMARY KEY, name TEXT, source TEXT, added_at INTEGER)`,
   `CREATE TABLE IF NOT EXISTS mcp (
@@ -56,12 +63,16 @@ export const DDL = [
      created_at INTEGER, updated_at INTEGER)`,
 ];
 
-let ready = null;
+// 按 D1 实例缓存 schema 就绪状态。本项目只有一个 DB 绑定,用全局变量也能跑,
+// 但那是隐式的全局状态:多绑定/多环境时会互相污染,而且单元测试里两个 FakeD1
+// 会共享同一个 ready,第二个库永远建不了表。
+const readyMap = new WeakMap();
 
 export async function ensureSchema(db) {
   if (!db) return false;
-  if (ready) return ready;
-  ready = (async () => {
+  const done = readyMap.get(db);
+  if (done) return done;
+  const p = (async () => {
     let version = 0;
     try {
       const row = await db.prepare('SELECT v FROM meta WHERE k = ?').bind('schema_version').first();
@@ -81,10 +92,11 @@ export async function ensureSchema(db) {
       .bind('schema_version', String(SCHEMA_VERSION)).run();
     return true;
   })().catch((e) => {
-    ready = null;
+    readyMap.delete(db);
     throw e;
   });
-  return ready;
+  readyMap.set(db, p);
+  return p;
 }
 
 export async function all(db, sql, ...args) {

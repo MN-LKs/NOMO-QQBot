@@ -39,12 +39,6 @@ export async function listSkills(env, { enabledOnly = false } = {}) {
   return enabledOnly ? out.filter((s) => s.enabled) : out;
 }
 
-export async function getSkill(env, id) {
-  await ensureSchema(env.DB);
-  const r = await env.DB.prepare('SELECT * FROM skills WHERE id = ?').bind(String(id)).first();
-  return r ? normalizeSkill(r) : null;
-}
-
 export async function saveSkill(env, skill) {
   await ensureSchema(env.DB);
   await env.DB.prepare(
